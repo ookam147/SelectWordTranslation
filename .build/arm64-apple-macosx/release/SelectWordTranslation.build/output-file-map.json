@@ -1,0 +1,67 @@
+{
+  "": {
+    "dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SelectWordTranslation.d",
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SelectWordTranslation.o",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/master.swiftdeps"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/AppLanguage.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/AppLanguage.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/AppLanguage~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/AppLanguage.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/AppLanguage.dia"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/HotkeyManager.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/HotkeyManager.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/HotkeyManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/HotkeyManager.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/HotkeyManager.dia"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/MenuBarManager.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/MenuBarManager.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/MenuBarManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/MenuBarManager.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/MenuBarManager.dia"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/ModelManager.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/ModelManager.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/ModelManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/ModelManager.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/ModelManager.dia"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/PopupWindowManager.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/PopupWindowManager.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/PopupWindowManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/PopupWindowManager.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/PopupWindowManager.dia"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/SelectWordTranslationApp.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SelectWordTranslationApp.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SelectWordTranslationApp~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SelectWordTranslationApp.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SelectWordTranslationApp.dia"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/SettingsView.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SettingsView.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SettingsView~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SettingsView.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/SettingsView.dia"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/TextSelectionManager.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TextSelectionManager.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TextSelectionManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TextSelectionManager.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TextSelectionManager.dia"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/TranslationPopupView.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TranslationPopupView.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TranslationPopupView~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TranslationPopupView.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TranslationPopupView.dia"
+  },
+  "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/Sources/SelectWordTranslation/TranslationService.swift": {
+    "object": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TranslationService.swift.o",
+    "swiftmodule": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TranslationService~partial.swiftmodule",
+    "swift-dependencies": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TranslationService.swiftdeps",
+    "diagnostics": "/Users/zwalking/Documents/Antigravity项目/SelectWordTranslation/.build/arm64-apple-macosx/release/SelectWordTranslation.build/TranslationService.dia"
+  }
+}
