@@ -120,3 +120,11 @@ struct TranslationPopupView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }
+
+#if DEBUG || canImport(SwiftUI)
+struct TranslationPopupView_Previews: PreviewProvider {
+    static var previews: some View {
+        TranslationPopupView(modelManager: ModelManager(), textSelectionManager: TextSelectionManager.shared)
+    }
+}
+#endif

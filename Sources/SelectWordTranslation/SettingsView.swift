@@ -595,3 +595,10 @@ struct HotkeySettingsView: View {
         print("✅ 录制快捷键: \(newConfig.displayName)")
     }
 }
+#if DEBUG || canImport(SwiftUI)
+struct SettingsView_Previews: PreviewProvider {
+    static var previews: some View {
+        SettingsView(modelManager: ModelManager())
+    }
+}
+#endif
