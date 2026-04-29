@@ -75,7 +75,7 @@ struct APIPreset: Identifiable, Codable, Equatable {
     
     // 内置预设 - 只保留 DeepSeek
     static let builtInPresets: [APIPreset] = [
-        APIPreset(id: "deepseek", name: "DeepSeek", baseURL: "https://api.deepseek.com/v1/chat/completions", defaultModel: "deepseek-chat", isBuiltIn: true),
+        APIPreset(id: "deepseek", name: "DeepSeek", baseURL: "https://api.deepseek.com/v1/chat/completions", defaultModel: "deepseek-v4-flash", isBuiltIn: true),
     ]
 }
 

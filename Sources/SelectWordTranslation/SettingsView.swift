@@ -229,7 +229,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     
-                    TextField("deepseek-chat", text: $editingModelName)
+                    TextField("deepseek-v4-flash", text: $editingModelName)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11, design: .monospaced))
                 }
