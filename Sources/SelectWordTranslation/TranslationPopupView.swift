@@ -55,26 +55,8 @@ struct TranslationPopupView: View {
                 .foregroundColor(.white)
                 .lineLimit(1)
             Spacer()
-            // 图钉按钮
-            Button(action: onPinToggle) {
-                Image(systemName: isPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 14))
-                    .foregroundColor(isPinned ? .blue : .gray)
-            }
-            .buttonStyle(.plain)
-            .help(isPinned ? localizedStrings.unpinWindow : localizedStrings.pinWindow)
-        }
-    }
-    
-    // MARK: - 翻译结果标题栏（语言选择 + 复制按钮）
-    private var translationResultHeader: some View {
-        HStack {
-            Text(localizedStrings.result)
-                .font(.caption)
-                .foregroundColor(.gray)
-            Spacer()
             
-            // ⭐ 语言选择菜单
+            // ⭐ 语言选择菜单（放在图钉左侧）
             Menu {
                 ForEach(TargetLanguage.languages) { language in
                     Button(action: {
@@ -102,7 +84,25 @@ struct TranslationPopupView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             
-            // 复制按钮放在Result行
+            // 图钉按钮
+            Button(action: onPinToggle) {
+                Image(systemName: isPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 14))
+                    .foregroundColor(isPinned ? .blue : .gray)
+            }
+            .buttonStyle(.plain)
+            .help(isPinned ? localizedStrings.unpinWindow : localizedStrings.pinWindow)
+        }
+    }
+    
+    // MARK: - 翻译结果标题行（Result + 复制按钮）
+    private var resultHeaderWithCopy: some View {
+        HStack {
+            Text(localizedStrings.result)
+                .font(.caption)
+                .foregroundColor(.gray)
+            Spacer()
+            // 复制按钮放在 Result 同一行
             Button(action: {
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
@@ -155,7 +155,7 @@ struct TranslationPopupView: View {
             
             // 译文区域
             VStack(alignment: .leading, spacing: 4) {
-                translationResultHeader
+                resultHeaderWithCopy
                 translationResultContent
             }
         }
@@ -163,48 +163,41 @@ struct TranslationPopupView: View {
     
     // MARK: - 横向布局（左原右译，长文本自动切换）
     private var horizontalContentLayout: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // 横向布局时，把标题栏放在上方
-            translationResultHeader
-            
-            // 左右分屏内容
-            HStack(alignment: .top, spacing: 12) {
-                // 左侧：原文
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(localizedStrings.original)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    ScrollView(.vertical, showsIndicators: true) {
-                        Text(originalText)
-                            .foregroundColor(.white)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.trailing, 4)
-                    }
-                    .frame(minHeight: 180, maxHeight: 1000)
+        // 左右分屏内容（不再有顶部多余的 Result 标题行）
+        HStack(alignment: .top, spacing: 12) {
+            // 左侧：原文
+            VStack(alignment: .leading, spacing: 4) {
+                Text(localizedStrings.original)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                ScrollView(.vertical, showsIndicators: true) {
+                    Text(originalText)
+                        .foregroundColor(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.trailing, 4)
                 }
-                .frame(maxWidth: .infinity)
-                
-                // 中间分隔线
-                Divider()
-                    .background(Color.gray)
-                
-                // 右侧：译文
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(localizedStrings.result)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    ScrollView(.vertical, showsIndicators: true) {
-                        translationResultContent
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.trailing, 4)
-                    }
-                    .frame(minHeight: 180, maxHeight: 1000)
-                }
-                .frame(maxWidth: .infinity)
+                .frame(minHeight: 180, maxHeight: 1000)
             }
-            .frame(minHeight: 200)
+            .frame(maxWidth: .infinity)
+            
+            // 中间分隔线
+            Divider()
+                .background(Color.gray)
+            
+            // 右侧：译文（Result + 复制按钮在同一行）
+            VStack(alignment: .leading, spacing: 4) {
+                resultHeaderWithCopy
+                ScrollView(.vertical, showsIndicators: true) {
+                    translationResultContent
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.trailing, 4)
+                }
+                .frame(minHeight: 180, maxHeight: 1000)
+            }
+            .frame(maxWidth: .infinity)
         }
+        .frame(minHeight: 200)
     }
 }
 
