@@ -48,6 +48,7 @@ final class TranslationPanelContentController: NSViewController {
     private let resultScrollView = TranslationPanelContentController.makeScrollView()
     private let progressIndicator = NSProgressIndicator()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let statusStack = NSStackView()
     private let copyButton = NSButton()
 
     override func loadView() {
@@ -55,9 +56,6 @@ final class TranslationPanelContentController: NSViewController {
         effectView.material = .popover
         effectView.blendingMode = .withinWindow
         effectView.state = .active
-        effectView.wantsLayer = true
-        effectView.layer?.cornerRadius = 12
-        effectView.layer?.masksToBounds = true
         view = effectView
 
         originalScrollView.documentView = originalTextView
@@ -72,12 +70,15 @@ final class TranslationPanelContentController: NSViewController {
         let header = makeHeader()
         let originalHeader = makeSectionHeader(title: L10n.original)
         let resultHeader = makeResultHeader()
-        let status = NSStackView(views: [progressIndicator, statusLabel])
-        status.orientation = .horizontal
-        status.spacing = 8
-        status.alignment = .centerY
+        statusStack.addArrangedSubview(progressIndicator)
+        statusStack.addArrangedSubview(statusLabel)
+        statusStack.orientation = .horizontal
+        statusStack.spacing = 8
+        statusStack.alignment = .centerY
+        statusStack.detachesHiddenViews = true
         progressIndicator.style = .spinning
         progressIndicator.controlSize = .small
+        progressIndicator.isDisplayedWhenStopped = false
 
         let divider = NSBox()
         divider.boxType = .separator
@@ -88,12 +89,13 @@ final class TranslationPanelContentController: NSViewController {
             originalScrollView,
             divider,
             resultHeader,
-            status,
+            statusStack,
             resultScrollView
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
+        stack.detachesHiddenViews = true
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
         stack.translatesAutoresizingMaskIntoConstraints = false
         effectView.addSubview(stack)
@@ -107,7 +109,7 @@ final class TranslationPanelContentController: NSViewController {
             originalScrollView.widthAnchor.constraint(equalTo: header.widthAnchor),
             divider.widthAnchor.constraint(equalTo: header.widthAnchor),
             resultHeader.widthAnchor.constraint(equalTo: header.widthAnchor),
-            status.widthAnchor.constraint(lessThanOrEqualTo: header.widthAnchor),
+            statusStack.widthAnchor.constraint(lessThanOrEqualTo: header.widthAnchor),
             resultScrollView.widthAnchor.constraint(equalTo: header.widthAnchor)
         ])
     }
@@ -124,12 +126,16 @@ final class TranslationPanelContentController: NSViewController {
         pinButton.toolTip = model.isPinned ? L10n.unpin : L10n.pin
 
         progressIndicator.stopAnimation(nil)
+        progressIndicator.isHidden = true
+        statusStack.isHidden = true
         statusLabel.textColor = .secondaryLabelColor
         switch model.state {
         case .idle:
             statusLabel.stringValue = ""
             resultTextView.string = ""
         case .loading:
+            statusStack.isHidden = false
+            progressIndicator.isHidden = false
             progressIndicator.startAnimation(nil)
             statusLabel.stringValue = L10n.translating
             resultTextView.string = ""
@@ -137,6 +143,7 @@ final class TranslationPanelContentController: NSViewController {
             statusLabel.stringValue = ""
             resultTextView.string = text
         case .error(let message):
+            statusStack.isHidden = false
             statusLabel.textColor = .systemRed
             statusLabel.stringValue = message
             resultTextView.string = ""
@@ -161,6 +168,15 @@ final class TranslationPanelContentController: NSViewController {
         statusLabel.stringValue = ""
         progressIndicator.stopAnimation(nil)
         model = nil
+    }
+
+    var presentationSnapshot: TranslationPanelPresentationSnapshot {
+        TranslationPanelPresentationSnapshot(
+            isStatusRowVisible: !statusStack.isHidden,
+            isProgressIndicatorVisible: !progressIndicator.isHidden,
+            statusText: statusLabel.stringValue,
+            resultText: resultTextView.string
+        )
     }
 
     private func makeHeader() -> NSStackView {
@@ -260,4 +276,11 @@ final class TranslationPanelContentController: NSViewController {
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         return textView
     }
+}
+
+struct TranslationPanelPresentationSnapshot: Equatable {
+    let isStatusRowVisible: Bool
+    let isProgressIndicatorVisible: Bool
+    let statusText: String
+    let resultText: String
 }

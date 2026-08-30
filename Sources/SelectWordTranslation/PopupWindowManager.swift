@@ -125,7 +125,7 @@ final class PopupWindowManager: NSObject, NSWindowDelegate {
     private func makePanel() -> NSPanel {
         let panel = NSPanel(
             contentRect: .zero,
-            styleMask: [.nonactivatingPanel, .fullSizeContentView, .resizable],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
