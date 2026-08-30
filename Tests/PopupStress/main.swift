@@ -27,6 +27,7 @@ private struct PopupStressRunner {
             modelName: "",
             selectedLanguage: .defaultLanguage
         )
+        verifySplitRatioAcrossResize(manager: manager, model: model)
         var warmedResidentSize: UInt64?
 
         for index in 0..<iterations {
@@ -43,8 +44,25 @@ private struct PopupStressRunner {
                 guard let controller = panel.contentViewController as? TranslationPanelContentController else {
                     fatalError("Popup content controller was unavailable")
                 }
-                guard controller.presentationSnapshot.isProgressIndicatorVisible else {
+                var layoutSnapshot = controller.presentationSnapshot
+                guard layoutSnapshot.isProgressIndicatorVisible else {
                     fatalError("Loading indicator was not visible")
+                }
+                verifyBalancedLayout(layoutSnapshot, context: "new translation at iteration \(index)")
+
+                if index == 0 {
+                    controller.setSplitRatio(0)
+                    layoutSnapshot = controller.presentationSnapshot
+                    guard layoutSnapshot.originalPaneHeight >= 99.5,
+                          layoutSnapshot.resultPaneHeight >= 99.5 else {
+                        fatalError("Split panes could collapse below their minimum height")
+                    }
+                }
+
+                controller.setSplitRatio(0.4)
+                let draggedRatio = controller.presentationSnapshot.splitRatio
+                guard abs(draggedRatio - 0.4) <= 0.02 else {
+                    fatalError("Dragged split ratio was not applied")
                 }
 
                 model.state = .result(String(repeating: "translation ", count: wordCount))
@@ -52,6 +70,14 @@ private struct PopupStressRunner {
                 let resultSnapshot = controller.presentationSnapshot
                 guard !resultSnapshot.isStatusRowVisible, !resultSnapshot.isProgressIndicatorVisible else {
                     fatalError("Loading UI remained visible after translation at iteration \(index)")
+                }
+                guard abs(resultSnapshot.splitRatio - draggedRatio) <= 0.02 else {
+                    fatalError("Split ratio changed after translation at iteration \(index)")
+                }
+
+                manager.show(viewModel: model, at: NSPoint(x: 300, y: 300), preservePosition: true)
+                guard abs(controller.presentationSnapshot.splitRatio - draggedRatio) <= 0.02 else {
+                    fatalError("Split ratio changed while preserving the popup at iteration \(index)")
                 }
                 manager.hide(notify: false)
                 guard monitor.activeMonitorCount == 0 else { fatalError("Event monitors were not removed") }
@@ -133,6 +159,45 @@ private struct PopupStressRunner {
         }
         let cornerRadius = panel.contentViewController?.view.layer?.cornerRadius ?? 0
         guard cornerRadius == 0 else { fatalError("Popup content was not square") }
+    }
+
+    @MainActor
+    private static func verifySplitRatioAcrossResize(
+        manager: PopupWindowManager,
+        model: TranslationPopupViewModel
+    ) {
+        model.originalText = String(repeating: "source ", count: 80)
+        model.state = .loading
+        model.modelName = "resize-model"
+        manager.show(viewModel: model, at: NSPoint(x: 300, y: 300))
+        guard let panel = NSApp.windows.first(where: { $0.isVisible }) as? NSPanel,
+              let controller = panel.contentViewController as? TranslationPanelContentController else {
+            fatalError("Resize test popup was unavailable")
+        }
+
+        controller.setSplitRatio(0.45)
+        let draggedRatio = controller.presentationSnapshot.splitRatio
+        guard abs(draggedRatio - 0.45) <= 0.02 else {
+            fatalError("Resize test split ratio was not applied")
+        }
+
+        model.state = .result(String(repeating: "translation ", count: 500))
+        manager.refreshLayout()
+        guard abs(controller.presentationSnapshot.splitRatio - draggedRatio) <= 0.02 else {
+            fatalError("Split ratio changed while the popup resized")
+        }
+        manager.hide(notify: false)
+    }
+
+    private static func verifyBalancedLayout(
+        _ snapshot: TranslationPanelPresentationSnapshot,
+        context: String
+    ) {
+        guard snapshot.originalPaneHeight >= 99.5,
+              snapshot.resultPaneHeight >= 99.5,
+              abs(snapshot.splitRatio - 0.5) <= 0.02 else {
+            fatalError("Popup panes were not balanced for \(context)")
+        }
     }
 
     private static func residentSize() -> UInt64 {
