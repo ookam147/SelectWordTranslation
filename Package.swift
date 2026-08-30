@@ -1,10 +1,11 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
     name: "SelectWordTranslation",
+    defaultLocalization: "en",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v15)
     ],
     products: [
         .executable(
@@ -12,14 +13,15 @@ let package = Package(
             targets: ["SelectWordTranslation"]
         )
     ],
-    dependencies: [
-        // 不再需要 MLX 依赖！
-    ],
+    dependencies: [],
     targets: [
         .executableTarget(
             name: "SelectWordTranslation",
             dependencies: [],
-            path: "Sources"
+            path: "Sources/SelectWordTranslation",
+            exclude: ["Info.plist"],
+            resources: [.process("Resources")]
         )
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

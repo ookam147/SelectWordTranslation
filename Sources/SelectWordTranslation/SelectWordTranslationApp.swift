@@ -1,162 +1,244 @@
+import AppKit
+import OSLog
 import SwiftUI
 
 @main
 struct SelectWordTranslationApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
-        Settings {
-            EmptyView()
-        }
+        Settings { EmptyView() }
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate, HotkeyManagerDelegate {
-    var menuBarManager = MenuBarManager()
-    var hotkeyManager = HotkeyManager()
-    var popupManager = PopupWindowManager()
-    var modelManager = ModelManager()
-    
-    // ⭐ 保存当前正在翻译的原文（用于语言变更时重新翻译）
-    private var currentOriginalText: String = ""
-    
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var coordinator: AppCoordinator?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        print("=== SelectWordTranslation App Started ===")
-        
-        // Inject model manager into MenuBarManager -> SettingsView
-        menuBarManager.modelManager = modelManager
-        menuBarManager.hotkeyManager = hotkeyManager  // ⭐ 传递快捷键管理器
-        menuBarManager.setupMenuBar()
-        print("Menu bar setup complete")
-        
-        hotkeyManager.delegate = self
-        hotkeyManager.start()
-        print("Hotkey manager started with \(hotkeyManager.currentConfig.displayName)")
+        let coordinator = AppCoordinator()
+        self.coordinator = coordinator
+        coordinator.start()
     }
-    
+
+    func applicationWillTerminate(_ notification: Notification) {
+        coordinator?.stop()
+        coordinator = nil
+    }
+}
+
+@MainActor
+final class AppCoordinator: NSObject, HotkeyManagerDelegate {
+    private let logger = Logger(subsystem: "com.zwalking.SelectWordTranslation", category: "Application")
+    private let modelManager: ModelManager
+    private let hotkeyManager: HotkeyManager
+    private let selectionProvider: TextSelectionProviding
+    private let translationService: TranslationServicing
+    private let popupManager: PopupWindowManager
+    private let popupViewModel: TranslationPopupViewModel
+    private let menuBarManager: MenuBarManager
+    private var translationTask: Task<Void, Never>?
+    private let requestTracker = RequestTracker()
+    private var currentText = ""
+    private var currentPosition = NSPoint.zero
+
+    override init() {
+        let credentials = KeychainCredentialStore()
+        let presets = PresetManager()
+        let modelManager = ModelManager(credentials: credentials, presetManager: presets)
+        let hotkeyManager = HotkeyManager()
+        let service = TranslationService()
+        self.modelManager = modelManager
+        self.hotkeyManager = hotkeyManager
+        selectionProvider = TextSelectionManager()
+        translationService = service
+        popupManager = PopupWindowManager()
+        popupViewModel = TranslationPopupViewModel(
+            originalText: "",
+            state: .idle,
+            modelName: "",
+            selectedLanguage: modelManager.targetLanguage
+        )
+        menuBarManager = MenuBarManager(modelManager: modelManager, hotkeyManager: hotkeyManager, translationService: service)
+        super.init()
+    }
+
+    func start() {
+        hotkeyManager.delegate = self
+        do {
+            try hotkeyManager.start()
+        } catch {
+            presentError(error)
+        }
+        menuBarManager.onTranslateSelection = { [weak self] in self?.didTriggerHotkey() }
+        menuBarManager.start()
+        popupManager.onDidClose = { [weak self] in self?.cancelTranslation() }
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
+        logger.info("Application started")
+    }
+
+    func stop() {
+        cancelTranslation()
+        popupManager.dispose()
+        menuBarManager.stop()
+        hotkeyManager.stop()
+        NSApp.servicesProvider = nil
+    }
+
     func didTriggerHotkey() {
-        print("Hotkey triggered!")
-        
-        // 1. Get Selected Text
-        guard let text = TextSelectionManager.shared.getSelectedText(), !text.isEmpty else {
-            print("No text selected")
-            NSSound.beep()
+        startSelectionTranslation(at: NSEvent.mouseLocation)
+    }
+
+    @objc(translateSelection:userData:error:)
+    func translateSelection(
+        _ pasteboard: NSPasteboard,
+        userData: String,
+        error: AutoreleasingUnsafeMutablePointer<NSString?>
+    ) {
+        guard let text = pasteboard.string(forType: .string) else {
+            error.pointee = L10n.noSelection as NSString
             return
         }
-        print("Selected text: \(text)")
-        
-        // ⭐ 保存原文用于后续重新翻译
-        currentOriginalText = text
-        
-        // 锁定当前鼠标位置（同时重置取消状态）
-        popupManager.lockCurrentPosition()
-        
-        // 获取当前模型名称和语言
-        let currentModelName = modelManager.selectedModelId ?? "Translation"
-        let currentLanguage = TargetLanguage.load()
-        
-        // 2. Show Popup (Loading)
-        popupManager.show(
-            originalText: text,
-            translatedText: "",
-            isLoading: true,
-            modelName: currentModelName,
-            selectedLanguage: currentLanguage,
-            onLanguageChange: { [weak self] newLanguage in
-                self?.handleLanguageChange(newLanguage)
-            },
-            onClose: {
-                print("DEBUG: Popup closed by user")
-            }
-        )
-        
-        // 3. Translate (异步)
-        Task {
-            let translation = await modelManager.generateTranslation(for: text)
-            
-            // 4. ⭐ 状态拦截：检查是否已被取消
-            await MainActor.run { [weak self] in
-                guard let self = self else { return }
-                
-                // 如果弹窗已被用户取消，直接返回
-                if self.popupManager.isCancelled {
-                    print("DEBUG: Translation completed but popup was cancelled, skipping")
-                    return
-                }
-                
-                // 弹窗未被取消，显示翻译结果
-                print("DEBUG: Showing translation result")
-                let currentLanguage = TargetLanguage.load()
-                self.popupManager.show(
-                    originalText: text,
-                    translatedText: translation,
-                    isLoading: false,
-                    modelName: currentModelName,
-                    selectedLanguage: currentLanguage,
-                    onLanguageChange: { [weak self] newLanguage in
-                        self?.handleLanguageChange(newLanguage)
-                    },
-                    onClose: {
-                        print("DEBUG: Result popup closed")
-                    }
+        startTranslation(text: text, language: modelManager.targetLanguage, at: NSEvent.mouseLocation, preservePosition: false)
+    }
+
+    private func startSelectionTranslation(at position: NSPoint) {
+        cancelTranslation()
+        let requestID = requestTracker.begin()
+        translationTask = Task { [weak self] in
+            guard let self else { return }
+            var selectedText: String?
+            do {
+                let text = try await selectionProvider.selectedText()
+                selectedText = text
+                try Task.checkCancellation()
+                try await performTranslation(
+                    requestID: requestID,
+                    text: text,
+                    language: modelManager.targetLanguage,
+                    position: position,
+                    preservePosition: false
                 )
+            } catch is CancellationError {
+                return
+            } catch {
+                guard requestTracker.isCurrent(requestID) else { return }
+                if let selectedText {
+                    showError(
+                        error.localizedDescription,
+                        text: selectedText,
+                        language: modelManager.targetLanguage,
+                        at: position,
+                        preservePosition: false
+                    )
+                    finish(requestID: requestID)
+                } else {
+                    requestTracker.finish(requestID)
+                    translationTask = nil
+                    presentError(error)
+                }
             }
         }
     }
-    
-    // ⭐ 处理语言变更
-    private func handleLanguageChange(_ newLanguage: TargetLanguage) {
-        print("DEBUG: Language changed to \(newLanguage.nativeName)")
-        
-        // 1. 保存新语言到 UserDefaults（同步后台设置）
-        TargetLanguage.save(newLanguage)
-        
-        // 2. 显示加载状态
-        let currentModelName = modelManager.selectedModelId ?? "Translation"
-        popupManager.show(
-            originalText: currentOriginalText,
-            translatedText: "",
-            isLoading: true,
-            modelName: currentModelName,
-            selectedLanguage: newLanguage,
-            onLanguageChange: { [weak self] language in
-                self?.handleLanguageChange(language)
-            },
-            onClose: {
-                print("DEBUG: Popup closed during retranslation")
-            }
-        )
-        
-        // 3. 重新翻译
-        Task {
-            let translation = await modelManager.generateTranslation(for: currentOriginalText)
-            
-            await MainActor.run { [weak self] in
-                guard let self = self else { return }
-                
-                // 如果弹窗已被用户取消，直接返回
-                if self.popupManager.isCancelled {
-                    print("DEBUG: Retranslation completed but popup was cancelled")
-                    return
-                }
-                
-                // 显示新的翻译结果
-                print("DEBUG: Showing retranslation result")
-                self.popupManager.show(
-                    originalText: self.currentOriginalText,
-                    translatedText: translation,
-                    isLoading: false,
-                    modelName: currentModelName,
-                    selectedLanguage: newLanguage,
-                    onLanguageChange: { [weak self] language in
-                        self?.handleLanguageChange(language)
-                    },
-                    onClose: {
-                        print("DEBUG: Retranslation popup closed")
-                    }
+
+    private func startTranslation(text: String, language: TargetLanguage, at position: NSPoint, preservePosition: Bool) {
+        cancelTranslation(hidePopup: false)
+        let requestID = requestTracker.begin()
+        translationTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await performTranslation(
+                    requestID: requestID,
+                    text: text,
+                    language: language,
+                    position: position,
+                    preservePosition: preservePosition
                 )
+            } catch is CancellationError {
+                return
+            } catch {
+                guard requestTracker.isCurrent(requestID) else { return }
+                showError(error.localizedDescription, text: text, language: language, at: position, preservePosition: preservePosition)
+                finish(requestID: requestID)
             }
+        }
+    }
+
+    private func performTranslation(
+        requestID: UUID,
+        text: String,
+        language: TargetLanguage,
+        position: NSPoint,
+        preservePosition: Bool
+    ) async throws {
+        let validatedText = try SelectionValidator.validated(text)
+        let configuration = modelManager.configuration
+        if configuration.apiType == .cloud && configuration.apiKey.isEmpty {
+            throw TranslationError.apiError(L10n.text("An API key is required."))
+        }
+        let request = TranslationRequest(id: requestID, text: validatedText, targetLanguage: language, configuration: configuration)
+        currentText = validatedText
+        currentPosition = position
+        modelManager.setTargetLanguage(language)
+
+        popupViewModel.originalText = validatedText
+        popupViewModel.state = .loading
+        popupViewModel.modelName = configuration.modelName
+        popupViewModel.selectedLanguage = language
+        popupViewModel.onLanguageChange = { [weak self] newLanguage in
+            guard let self else { return }
+            self.startTranslation(text: self.currentText, language: newLanguage, at: self.currentPosition, preservePosition: true)
+        }
+        popupManager.show(viewModel: popupViewModel, at: position, preservePosition: preservePosition)
+
+        let translated = try await translationService.translate(request)
+        try Task.checkCancellation()
+        guard requestTracker.isCurrent(requestID) else { return }
+        popupViewModel.state = .result(translated)
+        popupManager.refreshLayout()
+        finish(requestID: requestID)
+    }
+
+    private func showError(_ message: String, text: String, language: TargetLanguage, at position: NSPoint, preservePosition: Bool) {
+        popupViewModel.originalText = text
+        popupViewModel.state = .error(message)
+        popupViewModel.modelName = modelManager.configuration.modelName
+        popupViewModel.selectedLanguage = language
+        popupViewModel.onLanguageChange = { [weak self] newLanguage in
+            self?.startTranslation(text: text, language: newLanguage, at: position, preservePosition: true)
+        }
+        popupManager.show(viewModel: popupViewModel, at: position, preservePosition: preservePosition)
+    }
+
+    private func finish(requestID: UUID) {
+        guard requestTracker.isCurrent(requestID) else { return }
+        requestTracker.finish(requestID)
+        translationTask = nil
+    }
+
+    private func cancelTranslation(hidePopup: Bool = false) {
+        translationTask?.cancel()
+        translationTask = nil
+        requestTracker.cancel()
+        if hidePopup { popupManager.hide(notify: false) }
+    }
+
+    private func presentError(_ error: Error) {
+        logger.error("Operation failed: \(error.localizedDescription, privacy: .public)")
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L10n.error
+        alert.informativeText = error.localizedDescription
+        if (error as? TranslationError) == .accessibilityPermissionRequired {
+            alert.addButton(withTitle: L10n.openSettings)
+            alert.addButton(withTitle: L10n.cancel)
+            if alert.runModal() == .alertFirstButtonReturn,
+               let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        } else {
+            alert.runModal()
         }
     }
 }
-

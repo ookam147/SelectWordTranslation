@@ -1,81 +1,102 @@
-import Cocoa
+import AppKit
 import ApplicationServices
 
-class TextSelectionManager {
-    static let shared = TextSelectionManager()
-    
-    private init() {}
-    
-    func getSelectedText() -> String? {
-        // 方法 1：尝试通过辅助功能 API 获取选中文字
-        if let text = getSelectedTextViaAccessibility() {
-            return text
+@MainActor
+protocol TextSelectionProviding: AnyObject {
+    func selectedText() async throws -> String
+}
+
+@MainActor
+final class TextSelectionManager: TextSelectionProviding {
+    func selectedText() async throws -> String {
+        let trusted = AXIsProcessTrusted()
+        if let text = selectedTextViaAccessibility(), !text.isEmpty { return text }
+        if let text = await selectedTextViaClipboard(), !text.isEmpty { return text }
+        if !trusted {
+            promptForAccessibilityPermission()
+            throw TranslationError.accessibilityPermissionRequired
         }
-        
-        // 方法 2：Fallback - 通过剪贴板获取（模拟 Cmd+C）
-        print("DEBUG: Accessibility failed, trying clipboard fallback...")
-        return getSelectedTextViaClipboard()
+        throw TranslationError.noSelection
     }
-    
-    private func getSelectedTextViaAccessibility() -> String? {
-        let systemWideElement = AXUIElementCreateSystemWide()
-        var focusedElement: AnyObject?
-        
-        let error = AXUIElementCopyAttributeValue(systemWideElement, kAXFocusedUIElementAttribute as CFString, &focusedElement)
-        
-        if error == .success, let element = focusedElement {
-            let axElement = element as! AXUIElement
-            var selectedTextValue: AnyObject?
-            
-            let textError = AXUIElementCopyAttributeValue(axElement, kAXSelectedTextAttribute as CFString, &selectedTextValue)
-            
-            if textError == .success, let text = selectedTextValue as? String, !text.isEmpty {
-                print("DEBUG: Got text via Accessibility API")
+
+    private func selectedTextViaAccessibility() -> String? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedValue
+        ) == .success,
+        let focusedValue,
+        CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else { return nil }
+
+        let focusedElement = unsafeDowncast(focusedValue, to: AXUIElement.self)
+        var selectedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            focusedElement,
+            kAXSelectedTextAttribute as CFString,
+            &selectedValue
+        ) == .success else { return nil }
+        return selectedValue as? String
+    }
+
+    private func selectedTextViaClipboard() async -> String? {
+        let pasteboard = NSPasteboard.general
+        let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
+        pasteboard.clearContents()
+        let baselineChangeCount = pasteboard.changeCount
+
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x08, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x08, keyDown: false) else {
+            snapshot.restore(to: pasteboard)
+            return nil
+        }
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
+
+        for _ in 0..<10 {
+            try? await Task.sleep(for: .milliseconds(30))
+            guard !Task.isCancelled else { return nil }
+            if pasteboard.changeCount != baselineChangeCount {
+                let copiedChangeCount = pasteboard.changeCount
+                let text = pasteboard.string(forType: .string)
+                if pasteboard.changeCount == copiedChangeCount { snapshot.restore(to: pasteboard) }
                 return text
             }
         }
-        
+
+        if pasteboard.changeCount == baselineChangeCount { snapshot.restore(to: pasteboard) }
         return nil
     }
-    
-    private func getSelectedTextViaClipboard() -> String? {
-        let pasteboard = NSPasteboard.general
-        
-        // 1. 保存当前剪贴板内容
-        let oldContents = pasteboard.string(forType: .string)
-        let oldChangeCount = pasteboard.changeCount
-        
-        // 2. 模拟 Cmd+C 复制选中文字
-        let source = CGEventSource(stateID: .hidSystemState)
-        
-        // Key down: C with Command
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x08, keyDown: true) // 0x08 = C
-        keyDown?.flags = .maskCommand
-        keyDown?.post(tap: .cghidEventTap)
-        
-        // Key up: C with Command
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x08, keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyUp?.post(tap: .cghidEventTap)
-        
-        // 3. 等待剪贴板更新（需要一点时间）
-        usleep(100_000) // 100ms
-        
-        // 4. 读取新的剪贴板内容
-        var selectedText: String? = nil
-        
-        // 检查剪贴板是否有变化
-        if pasteboard.changeCount != oldChangeCount {
-            selectedText = pasteboard.string(forType: .string)
-            print("DEBUG: Got text via clipboard: \(selectedText ?? "nil")")
+
+    private func promptForAccessibilityPermission() {
+        AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+    }
+}
+
+@MainActor
+private struct PasteboardSnapshot {
+    private let items: [[NSPasteboard.PasteboardType: Data]]
+
+    init(pasteboard: NSPasteboard) {
+        items = (pasteboard.pasteboardItems ?? []).map { item in
+            Dictionary(uniqueKeysWithValues: item.types.compactMap { type in
+                item.data(forType: type).map { (type, $0) }
+            })
         }
-        
-        // 5. 恢复原来的剪贴板内容（如果有）
-        if let old = oldContents, selectedText != nil {
-            pasteboard.clearContents()
-            pasteboard.setString(old, forType: .string)
+    }
+
+    func restore(to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        guard !items.isEmpty else { return }
+        let restoredItems = items.map { contents -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            for (type, data) in contents { item.setData(data, forType: type) }
+            return item
         }
-        
-        return selectedText
+        pasteboard.writeObjects(restoredItems)
     }
 }

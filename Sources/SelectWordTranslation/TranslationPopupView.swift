@@ -1,236 +1,263 @@
-import SwiftUI
+import AppKit
+import Combine
 
-struct TranslationPopupView: View {
-    let originalText: String
-    let translatedText: String
-    let isLoading: Bool
-    let modelName: String  // 新增：模型名称
-    let onClose: () -> Void
-    let onPinToggle: () -> Void  // 新增：置顶切换回调
-    let isPinned: Bool  // 新增：置顶状态
-    let selectedLanguage: TargetLanguage  // ⭐ 新增：当前选择的语言
-    let onLanguageChange: (TargetLanguage) -> Void  // ⭐ 新增：语言变更回调
-    
-    @ObservedObject var localizedStrings = LocalizedStrings.shared
-    
-    // ⭐ 智能布局判断：当文本过长时切换为横向布局
-    private var useHorizontalLayout: Bool {
-        let totalLength = originalText.count + translatedText.count
-        let maxSingleLength = max(originalText.count, translatedText.count)
-        // 当总字符数超过100，或任一文本超过80字符时，切换为横向布局
-        return totalLength > 100 || maxSingleLength > 80
+@MainActor
+final class TranslationPopupViewModel: ObservableObject {
+    @Published var originalText: String
+    @Published var state: TranslationState
+    @Published var modelName: String
+    @Published var selectedLanguage: TargetLanguage
+    @Published var isPinned = false
+
+    var onClose: (() -> Void)?
+    var onPinToggle: (() -> Void)?
+    var onLanguageChange: ((TargetLanguage) -> Void)?
+
+    init(originalText: String, state: TranslationState, modelName: String, selectedLanguage: TargetLanguage) {
+        self.originalText = originalText
+        self.state = state
+        self.modelName = modelName
+        self.selectedLanguage = selectedLanguage
     }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // ========== 顶部工具栏（始终横向） ==========
-            headerBar
-            
-            // ========== 内容区域：根据文本长度智能切换布局 ==========
-            if useHorizontalLayout {
-                horizontalContentLayout
-            } else {
-                verticalContentLayout
-            }
-        }
-        .padding()
-        .frame(minWidth: useHorizontalLayout ? 500 : 300,
-               maxWidth: useHorizontalLayout ? 700 : 400)
-        // 不设置maxHeight，让内容自然展开，窗口管理器会限制不超出屏幕
-        .background(Color.black.opacity(0.85))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+
+    var translatedText: String {
+        if case .result(let value) = state { return value }
+        return ""
     }
-    
-    // MARK: - 顶部工具栏
-    private var headerBar: some View {
-        HStack {
-            // 模型图标 + Models: + 模型名称
-            Image(systemName: "cpu")
-                .foregroundColor(.white)
-            Text(localizedStrings.models)
-                .font(.headline)
-                .foregroundColor(.gray)
-            Text(modelName.isEmpty ? "Unknown" : modelName)
-                .font(.headline)
-                .foregroundColor(.white)
-                .lineLimit(1)
-            Spacer()
-            
-            // ⭐ 语言选择菜单（放在图钉左侧）
-            Menu {
-                ForEach(TargetLanguage.languages) { language in
-                    Button(action: {
-                        onLanguageChange(language)
-                    }) {
-                        HStack {
-                            Text(language.displayName)
-                            if language.id == selectedLanguage.id {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: "globe")
-                        .font(.system(size: 11))
-                    Text(selectedLanguage.nativeName)
-                        .font(.system(size: 11))
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9))
-                }
-                .foregroundColor(.gray)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            
-            // 图钉按钮
-            Button(action: onPinToggle) {
-                Image(systemName: isPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 14))
-                    .foregroundColor(isPinned ? .blue : .gray)
-            }
-            .buttonStyle(.plain)
-            .help(isPinned ? localizedStrings.unpinWindow : localizedStrings.pinWindow)
-        }
-    }
-    
-    // MARK: - 翻译结果标题行（Result + 复制按钮）
-    private var resultHeaderWithCopy: some View {
-        HStack {
-            Text(localizedStrings.result)
-                .font(.caption)
-                .foregroundColor(.gray)
-            Spacer()
-            // 复制按钮放在 Result 同一行
-            Button(action: {
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setString(translatedText, forType: .string)
-                print("Copied to clipboard")
-            }) {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 12))
-                    .foregroundColor(.gray)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-    
-    // MARK: - 翻译结果文本内容（加载中 / 已完成）
-    private var translationResultContent: some View {
-        Group {
-            if isLoading {
-                HStack {
-                    ProgressView()
-                        .scaleEffect(0.5)
-                    Text(localizedStrings.translating)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            } else {
-                Text(translatedText)
-                    .foregroundColor(.white)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-    
-    // MARK: - 纵向布局（上原下译，短文本默认）
-    private var verticalContentLayout: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // 原文区域
-            VStack(alignment: .leading, spacing: 4) {
-                Text(localizedStrings.original)
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                Text(originalText)
-                    .foregroundColor(.white)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            
-            Divider()
-                .background(Color.gray)
-            
-            // 译文区域
-            VStack(alignment: .leading, spacing: 4) {
-                resultHeaderWithCopy
-                translationResultContent
-            }
-        }
-    }
-    
-    // MARK: - 横向布局（左原右译，长文本自动切换）
-    private var horizontalContentLayout: some View {
-        // 左右分屏内容（不再有顶部多余的 Result 标题行）
-        HStack(alignment: .top, spacing: 12) {
-            // 左侧：原文
-            VStack(alignment: .leading, spacing: 4) {
-                Text(localizedStrings.original)
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                ScrollView(.vertical, showsIndicators: true) {
-                    Text(originalText)
-                        .foregroundColor(.white)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.trailing, 4)
-                }
-                .frame(minHeight: 180, maxHeight: 1000)
-            }
-            .frame(maxWidth: .infinity)
-            
-            // 中间分隔线
-            Divider()
-                .background(Color.gray)
-            
-            // 右侧：译文（Result + 复制按钮在同一行）
-            VStack(alignment: .leading, spacing: 4) {
-                resultHeaderWithCopy
-                ScrollView(.vertical, showsIndicators: true) {
-                    translationResultContent
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.trailing, 4)
-                }
-                .frame(minHeight: 180, maxHeight: 1000)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .frame(minHeight: 200)
+
+    func clear() {
+        originalText = ""
+        state = .idle
+        modelName = ""
+        onClose = nil
+        onPinToggle = nil
+        onLanguageChange = nil
     }
 }
 
-#if DEBUG || canImport(SwiftUI)
-struct TranslationPopupView_Previews: PreviewProvider {
-    static var previews: some View {
-        // 短文本预览（纵向布局）
-        TranslationPopupView(
-            originalText: "Hello, world!",
-            translatedText: "你好，世界！",
-            isLoading: false,
-            modelName: "GPT-4",
-            onClose: {},
-            onPinToggle: {},
-            isPinned: false,
-            selectedLanguage: TargetLanguage.load(),
-            onLanguageChange: { _ in }
-        )
-        .previewDisplayName("短文本 - 纵向布局")
-        
-        // 长文本预览（横向布局）
-        TranslationPopupView(
-            originalText: "This is a much longer text that should trigger the horizontal layout mode. When the total character count exceeds the threshold, the view automatically switches to a side-by-side layout for better readability.",
-            translatedText: "这是一段更长的文本，应该触发横向布局模式。当总字符数超过阈值时，视图会自动切换为左右并排的布局，以提供更好的可读性。",
-            isLoading: false,
-            modelName: "GPT-4",
-            onClose: {},
-            onPinToggle: {},
-            isPinned: false,
-            selectedLanguage: TargetLanguage.load(),
-            onLanguageChange: { _ in }
-        )
-        .previewDisplayName("长文本 - 横向布局")
+@MainActor
+final class TranslationPanelContentController: NSViewController {
+    private weak var model: TranslationPopupViewModel?
+    private let modelLabel = NSTextField(labelWithString: "")
+    private let languagePopup = NSPopUpButton()
+    private let pinButton = NSButton()
+    private let closeButton = NSButton()
+    private let originalTextView = TranslationPanelContentController.makeTextView()
+    private let resultTextView = TranslationPanelContentController.makeTextView()
+    private let originalScrollView = TranslationPanelContentController.makeScrollView()
+    private let resultScrollView = TranslationPanelContentController.makeScrollView()
+    private let progressIndicator = NSProgressIndicator()
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let copyButton = NSButton()
+
+    override func loadView() {
+        let effectView = NSVisualEffectView()
+        effectView.material = .popover
+        effectView.blendingMode = .withinWindow
+        effectView.state = .active
+        effectView.wantsLayer = true
+        effectView.layer?.cornerRadius = 12
+        effectView.layer?.masksToBounds = true
+        view = effectView
+
+        originalScrollView.documentView = originalTextView
+        resultScrollView.documentView = resultTextView
+        originalScrollView.translatesAutoresizingMaskIntoConstraints = false
+        resultScrollView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            originalScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 52),
+            resultScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 60)
+        ])
+
+        let header = makeHeader()
+        let originalHeader = makeSectionHeader(title: L10n.original)
+        let resultHeader = makeResultHeader()
+        let status = NSStackView(views: [progressIndicator, statusLabel])
+        status.orientation = .horizontal
+        status.spacing = 8
+        status.alignment = .centerY
+        progressIndicator.style = .spinning
+        progressIndicator.controlSize = .small
+
+        let divider = NSBox()
+        divider.boxType = .separator
+
+        let stack = NSStackView(views: [
+            header,
+            originalHeader,
+            originalScrollView,
+            divider,
+            resultHeader,
+            status,
+            resultScrollView
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        effectView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: effectView.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28),
+            originalHeader.widthAnchor.constraint(equalTo: header.widthAnchor),
+            originalScrollView.widthAnchor.constraint(equalTo: header.widthAnchor),
+            divider.widthAnchor.constraint(equalTo: header.widthAnchor),
+            resultHeader.widthAnchor.constraint(equalTo: header.widthAnchor),
+            status.widthAnchor.constraint(lessThanOrEqualTo: header.widthAnchor),
+            resultScrollView.widthAnchor.constraint(equalTo: header.widthAnchor)
+        ])
+    }
+
+    func update(with model: TranslationPopupViewModel) {
+        loadViewIfNeeded()
+        self.model = model
+        modelLabel.stringValue = model.modelName.isEmpty ? L10n.appName : model.modelName
+        originalTextView.string = model.originalText
+        languagePopup.removeAllItems()
+        languagePopup.addItems(withTitles: TargetLanguage.languages.map(\.displayName))
+        languagePopup.selectItem(at: TargetLanguage.languages.firstIndex(of: model.selectedLanguage) ?? 0)
+        pinButton.image = NSImage(systemSymbolName: model.isPinned ? "pin.fill" : "pin", accessibilityDescription: nil)
+        pinButton.toolTip = model.isPinned ? L10n.unpin : L10n.pin
+
+        progressIndicator.stopAnimation(nil)
+        statusLabel.textColor = .secondaryLabelColor
+        switch model.state {
+        case .idle:
+            statusLabel.stringValue = ""
+            resultTextView.string = ""
+        case .loading:
+            progressIndicator.startAnimation(nil)
+            statusLabel.stringValue = L10n.translating
+            resultTextView.string = ""
+        case .result(let text):
+            statusLabel.stringValue = ""
+            resultTextView.string = text
+        case .error(let message):
+            statusLabel.textColor = .systemRed
+            statusLabel.stringValue = message
+            resultTextView.string = ""
+        }
+        copyButton.isEnabled = !model.translatedText.isEmpty
+        originalTextView.scrollToBeginningOfDocument(nil)
+        resultTextView.scrollToBeginningOfDocument(nil)
+    }
+
+    var desiredContentSize: NSSize {
+        guard let model else { return NSSize(width: 400, height: 220) }
+        let textLength = model.originalText.count + model.translatedText.count
+        let width: CGFloat = textLength > 240 ? 600 : 420
+        let estimatedLines = min(18, max(2, textLength / (textLength > 240 ? 80 : 52)))
+        let height = min(560, max(220, 190 + CGFloat(estimatedLines) * 18))
+        return NSSize(width: width, height: height)
+    }
+
+    func clearTextStorage() {
+        originalTextView.string = ""
+        resultTextView.string = ""
+        statusLabel.stringValue = ""
+        progressIndicator.stopAnimation(nil)
+        model = nil
+    }
+
+    private func makeHeader() -> NSStackView {
+        let icon = NSImageView(image: NSImage(systemSymbolName: "translate", accessibilityDescription: L10n.appName) ?? NSImage())
+        modelLabel.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        modelLabel.lineBreakMode = .byTruncatingTail
+        modelLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        languagePopup.target = self
+        languagePopup.action = #selector(languageChanged)
+        languagePopup.controlSize = .small
+        pinButton.image = NSImage(systemSymbolName: "pin", accessibilityDescription: L10n.pin)
+        pinButton.bezelStyle = .accessoryBarAction
+        pinButton.isBordered = false
+        pinButton.target = self
+        pinButton.action = #selector(togglePin)
+        closeButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: L10n.close)
+        closeButton.bezelStyle = .accessoryBarAction
+        closeButton.isBordered = false
+        closeButton.target = self
+        closeButton.action = #selector(close)
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let stack = NSStackView(views: [icon, modelLabel, spacer, languagePopup, pinButton, closeButton])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 8
+        return stack
+    }
+
+    private func makeSectionHeader(title: String) -> NSStackView {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [label])
+        stack.orientation = .horizontal
+        return stack
+    }
+
+    private func makeResultHeader() -> NSStackView {
+        let label = NSTextField(labelWithString: L10n.result)
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.textColor = .secondaryLabelColor
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        copyButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: L10n.copy)
+        copyButton.bezelStyle = .accessoryBarAction
+        copyButton.isBordered = false
+        copyButton.toolTip = L10n.copy
+        copyButton.target = self
+        copyButton.action = #selector(copyTranslation)
+        let stack = NSStackView(views: [label, spacer, copyButton])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        return stack
+    }
+
+    @objc private func languageChanged() {
+        guard languagePopup.indexOfSelectedItem >= 0 else { return }
+        let language = TargetLanguage.languages[languagePopup.indexOfSelectedItem]
+        model?.selectedLanguage = language
+        model?.onLanguageChange?(language)
+    }
+
+    @objc private func togglePin() { model?.onPinToggle?() }
+    @objc private func close() { model?.onClose?() }
+
+    @objc private func copyTranslation() {
+        guard let text = model?.translatedText, !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private static func makeScrollView() -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        return scrollView
+    }
+
+    private static func makeTextView() -> NSTextView {
+        let textView = NSTextView()
+        textView.drawsBackground = false
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.font = .systemFont(ofSize: NSFont.systemFontSize)
+        textView.textColor = .labelColor
+        textView.textContainerInset = NSSize(width: 2, height: 4)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        return textView
     }
 }
-#endif

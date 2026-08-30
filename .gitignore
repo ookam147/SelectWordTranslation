@@ -1,0 +1,7 @@
+.build/
+dist/
+SelectWordTranslation.app/
+DerivedData/
+*.xcuserstate
+*.xcuserdata/
+.DS_Store

@@ -1,245 +1,139 @@
-import Cocoa
+import AppKit
 import Carbon
+import Foundation
 
+@MainActor
 protocol HotkeyManagerDelegate: AnyObject {
     func didTriggerHotkey()
 }
 
-// MARK: - 快捷键配置
-struct HotkeyConfig: Codable, Equatable {
-    let keyCode: UInt32      // 键码，如 kVK_ANSI_D
-    let modifiers: UInt32    // 修饰键，如 optionKey
-    
+struct HotkeyConfig: Codable, Equatable, Sendable {
+    let keyCode: UInt32
+    let modifiers: UInt32
     static let userDefaultsKey = "com.selectwordtranslation.hotkey"
-    
-    // 默认快捷键：Option+D
-    static let `default` = HotkeyConfig(
-        keyCode: UInt32(kVK_ANSI_D),
-        modifiers: UInt32(optionKey)
-    )
-    
-    // 保存到 UserDefaults
-    func save() {
-        let encoder = JSONEncoder()
-        if let data = try? encoder.encode(self) {
-            UserDefaults.standard.set(data, forKey: HotkeyConfig.userDefaultsKey)
-        }
-    }
-    
-    // 从 UserDefaults 加载
-    static func load() -> HotkeyConfig {
-        guard let data = UserDefaults.standard.data(forKey: HotkeyConfig.userDefaultsKey),
-              let config = try? JSONDecoder().decode(HotkeyConfig.self, from: data) else {
-            return .default
-        }
-        return config
-    }
-    
-    // 获取显示名称，如 "⌥D"
+    static let `default` = HotkeyConfig(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(optionKey))
+
     var displayName: String {
-        var result = ""
-        
-        // 修饰键符号
-        if modifiers & UInt32(controlKey) != 0 {
-            result += "⌃"
-        }
-        if modifiers & UInt32(optionKey) != 0 {
-            result += "⌥"
-        }
-        if modifiers & UInt32(shiftKey) != 0 {
-            result += "⇧"
-        }
-        if modifiers & UInt32(cmdKey) != 0 {
-            result += "⌘"
-        }
-        
-        // 键名
-        result += keyCodeToString(keyCode)
-        
-        return result
+        var value = ""
+        if modifiers & UInt32(controlKey) != 0 { value += "⌃" }
+        if modifiers & UInt32(optionKey) != 0 { value += "⌥" }
+        if modifiers & UInt32(shiftKey) != 0 { value += "⇧" }
+        if modifiers & UInt32(cmdKey) != 0 { value += "⌘" }
+        value += Self.keyNames[Int(keyCode)] ?? "Key \(keyCode)"
+        return value
     }
-    
-    // 键码转字符串
-    private func keyCodeToString(_ keyCode: UInt32) -> String {
-        switch Int(keyCode) {
-        case kVK_ANSI_A: return "A"
-        case kVK_ANSI_B: return "B"
-        case kVK_ANSI_C: return "C"
-        case kVK_ANSI_D: return "D"
-        case kVK_ANSI_E: return "E"
-        case kVK_ANSI_F: return "F"
-        case kVK_ANSI_G: return "G"
-        case kVK_ANSI_H: return "H"
-        case kVK_ANSI_I: return "I"
-        case kVK_ANSI_J: return "J"
-        case kVK_ANSI_K: return "K"
-        case kVK_ANSI_L: return "L"
-        case kVK_ANSI_M: return "M"
-        case kVK_ANSI_N: return "N"
-        case kVK_ANSI_O: return "O"
-        case kVK_ANSI_P: return "P"
-        case kVK_ANSI_Q: return "Q"
-        case kVK_ANSI_R: return "R"
-        case kVK_ANSI_S: return "S"
-        case kVK_ANSI_T: return "T"
-        case kVK_ANSI_U: return "U"
-        case kVK_ANSI_V: return "V"
-        case kVK_ANSI_W: return "W"
-        case kVK_ANSI_X: return "X"
-        case kVK_ANSI_Y: return "Y"
-        case kVK_ANSI_Z: return "Z"
-        case kVK_ANSI_0: return "0"
-        case kVK_ANSI_1: return "1"
-        case kVK_ANSI_2: return "2"
-        case kVK_ANSI_3: return "3"
-        case kVK_ANSI_4: return "4"
-        case kVK_ANSI_5: return "5"
-        case kVK_ANSI_6: return "6"
-        case kVK_ANSI_7: return "7"
-        case kVK_ANSI_8: return "8"
-        case kVK_ANSI_9: return "9"
-        case kVK_Space: return "Space"
-        case kVK_Return: return "↩"
-        case kVK_Tab: return "⇥"
-        case kVK_Delete: return "⌫"
-        case kVK_Escape: return "⎋"
-        case kVK_F1: return "F1"
-        case kVK_F2: return "F2"
-        case kVK_F3: return "F3"
-        case kVK_F4: return "F4"
-        case kVK_F5: return "F5"
-        case kVK_F6: return "F6"
-        case kVK_F7: return "F7"
-        case kVK_F8: return "F8"
-        case kVK_F9: return "F9"
-        case kVK_F10: return "F10"
-        case kVK_F11: return "F11"
-        case kVK_F12: return "F12"
-        default: return "?"
+
+    func save(defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(self) { defaults.set(data, forKey: Self.userDefaultsKey) }
+    }
+
+    static func load(defaults: UserDefaults = .standard) -> HotkeyConfig {
+        guard let data = defaults.data(forKey: userDefaultsKey),
+              let value = try? JSONDecoder().decode(HotkeyConfig.self, from: data) else { return .default }
+        return value
+    }
+
+    private static let keyNames: [Int: String] = [
+        kVK_ANSI_A: "A", kVK_ANSI_B: "B", kVK_ANSI_C: "C", kVK_ANSI_D: "D", kVK_ANSI_E: "E",
+        kVK_ANSI_F: "F", kVK_ANSI_G: "G", kVK_ANSI_H: "H", kVK_ANSI_I: "I", kVK_ANSI_J: "J",
+        kVK_ANSI_K: "K", kVK_ANSI_L: "L", kVK_ANSI_M: "M", kVK_ANSI_N: "N", kVK_ANSI_O: "O",
+        kVK_ANSI_P: "P", kVK_ANSI_Q: "Q", kVK_ANSI_R: "R", kVK_ANSI_S: "S", kVK_ANSI_T: "T",
+        kVK_ANSI_U: "U", kVK_ANSI_V: "V", kVK_ANSI_W: "W", kVK_ANSI_X: "X", kVK_ANSI_Y: "Y",
+        kVK_ANSI_Z: "Z", kVK_ANSI_0: "0", kVK_ANSI_1: "1", kVK_ANSI_2: "2", kVK_ANSI_3: "3",
+        kVK_ANSI_4: "4", kVK_ANSI_5: "5", kVK_ANSI_6: "6", kVK_ANSI_7: "7", kVK_ANSI_8: "8",
+        kVK_ANSI_9: "9", kVK_Space: "Space", kVK_Return: "↩", kVK_Tab: "⇥", kVK_Delete: "⌫",
+        kVK_Escape: "⎋", kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4",
+        kVK_F5: "F5", kVK_F6: "F6", kVK_F7: "F7", kVK_F8: "F8", kVK_F9: "F9",
+        kVK_F10: "F10", kVK_F11: "F11", kVK_F12: "F12"
+    ]
+}
+
+enum HotkeyError: LocalizedError, Sendable {
+    case eventHandler(OSStatus)
+    case registration(OSStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .eventHandler(let status): "Unable to install the shortcut handler (\(status))."
+        case .registration(let status): "The shortcut is unavailable (\(status))."
         }
     }
 }
 
-class HotkeyManager {
+@MainActor
+final class HotkeyManager {
     weak var delegate: HotkeyManagerDelegate?
-    
+    private(set) var currentConfig: HotkeyConfig
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
-    
-    // 当前快捷键配置
-    private(set) var currentConfig: HotkeyConfig
-    
-    // 使用一个唯一的 ID 来标识我们的快捷键
-    private let hotKeySignature: OSType = {
-        // "SWTT" 转为 OSType
-        let chars: [UInt8] = [0x53, 0x57, 0x54, 0x54] // S, W, T, T
-        return OSType(chars[0]) << 24 | OSType(chars[1]) << 16 | OSType(chars[2]) << 8 | OSType(chars[3])
-    }()
-    
-    fileprivate static var sharedInstance: HotkeyManager?
-    
-    init() {
-        // 加载保存的快捷键配置
-        self.currentConfig = HotkeyConfig.load()
-        HotkeyManager.sharedInstance = self
+    private let signature: OSType = 0x53575454 // SWTT
+
+    init(defaults: UserDefaults = .standard) {
+        currentConfig = HotkeyConfig.load(defaults: defaults)
     }
-    
-    func start() {
-        // 1. 定义事件类型
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard), 
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        
-        // 2. 安装全局事件处理器（使用静态回调）
+
+    func start() throws {
+        guard eventHandlerRef == nil else { return }
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let status = InstallEventHandler(
             GetApplicationEventTarget(),
-            hotKeyEventHandler,
+            selectWordHotkeyHandler,
             1,
             &eventType,
-            nil, // 不传 userData，使用静态实例
+            Unmanaged.passUnretained(self).toOpaque(),
             &eventHandlerRef
         )
-        
-        if status != noErr {
-            print("❌ Failed to install event handler: \(status)")
-            return
+        guard status == noErr else { throw HotkeyError.eventHandler(status) }
+        do {
+            try register(currentConfig)
+        } catch {
+            stop()
+            throw error
         }
-        
-        // 3. 注册当前配置的快捷键
-        registerHotkey(config: currentConfig)
     }
-    
-    // 注册快捷键
-    private func registerHotkey(config: HotkeyConfig) {
-        var hotKeyID = EventHotKeyID(signature: hotKeySignature, id: 1)
-        let registerStatus = RegisterEventHotKey(
+
+    func updateHotkey(config: HotkeyConfig, defaults: UserDefaults = .standard) throws {
+        let previous = currentConfig
+        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef); self.hotKeyRef = nil }
+        do {
+            try register(config)
+            currentConfig = config
+            config.save(defaults: defaults)
+        } catch {
+            try? register(previous)
+            throw error
+        }
+    }
+
+    func stop() {
+        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef); self.hotKeyRef = nil }
+        if let eventHandlerRef { RemoveEventHandler(eventHandlerRef); self.eventHandlerRef = nil }
+    }
+
+    fileprivate func handleHotkey() { delegate?.didTriggerHotkey() }
+
+    private func register(_ config: HotkeyConfig) throws {
+        let id = EventHotKeyID(signature: signature, id: 1)
+        let status = RegisterEventHotKey(
             config.keyCode,
             config.modifiers,
-            hotKeyID,
+            id,
             GetApplicationEventTarget(),
-            OptionBits(0),
+            0,
             &hotKeyRef
         )
-        
-        if registerStatus != noErr {
-            print("❌ Failed to register hotkey: \(registerStatus)")
-            return
-        }
-        
-        print("✅ Hotkey \(config.displayName) registered successfully (Carbon API)")
+        guard status == noErr else { throw HotkeyError.registration(status) }
     }
-    
-    // 更新快捷键（运行时动态更新）
-    func updateHotkey(config: HotkeyConfig) {
-        // 先注销旧的快捷键
-        if let hotKeyRef = hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
-        }
-        
-        // 注册新的快捷键
-        currentConfig = config
-        registerHotkey(config: config)
-        
-        // 保存到 UserDefaults
-        config.save()
-        
-        print("✅ Hotkey updated to \(config.displayName)")
-    }
-    
-    func stop() {
-        if let hotKeyRef = hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
-        }
-        
-        if let eventHandlerRef = eventHandlerRef {
-            RemoveEventHandler(eventHandlerRef)
-            self.eventHandlerRef = nil
-        }
-        
-        print("🛑 Hotkey unregistered")
-    }
-    
-    fileprivate func handleHotKeyEvent() {
-        print("DEBUG: Hotkey \(currentConfig.displayName) triggered (Carbon)")
-        DispatchQueue.main.async { [weak self] in
-            self?.delegate?.didTriggerHotkey()
-        }
-    }
-    
-    deinit {
-        stop()
-    }
+
 }
 
-// 静态回调函数（Carbon API 要求）
-private func hotKeyEventHandler(
+private func selectWordHotkeyHandler(
     nextHandler: EventHandlerCallRef?,
     event: EventRef?,
     userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    HotkeyManager.sharedInstance?.handleHotKeyEvent()
+    guard let userData else { return OSStatus(eventNotHandledErr) }
+    let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+    Task { @MainActor in manager.handleHotkey() }
     return noErr
 }
