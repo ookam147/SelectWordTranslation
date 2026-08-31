@@ -67,20 +67,26 @@ final class PopupWindowManager: NSObject, NSWindowDelegate {
         if panel.contentViewController !== controller {
             panel.contentViewController = controller
         }
-        let preservedSplitRatio = preservePosition && panel.isVisible
-            ? controller.presentationSnapshot.splitRatio
+        let previousLayout = preservePosition && panel.isVisible
+            ? controller.presentationSnapshot
             : nil
         controller.update(with: viewModel, resetSplit: !preservePosition)
+        let preservesLayoutMode = previousLayout?.layoutMode == controller.presentationSnapshot.layoutMode
+        let fittingSize = if let previousLayout, preservesLayoutMode {
+            controller.desiredContentSize(preservingSplitRatio: previousLayout.splitRatio)
+        } else {
+            controller.desiredContentSize
+        }
         let targetFrame: NSRect
         if preservePosition, panel.isVisible {
-            targetFrame = resizedFrame(from: panel.frame, fittingSize: controller.desiredContentSize)
+            targetFrame = resizedFrame(from: panel.frame, fittingSize: fittingSize)
         } else {
-            targetFrame = frame(for: controller.desiredContentSize, near: position)
+            targetFrame = frame(for: fittingSize, near: position)
         }
         panel.setFrame(targetFrame, display: true)
         panel.contentView?.layoutSubtreeIfNeeded()
-        if let preservedSplitRatio {
-            controller.setSplitRatio(preservedSplitRatio)
+        if let previousLayout, preservesLayoutMode {
+            controller.setSplitRatio(previousLayout.splitRatio)
         } else {
             controller.applyPendingSplitLayout()
         }
@@ -91,11 +97,19 @@ final class PopupWindowManager: NSObject, NSWindowDelegate {
 
     func refreshLayout() {
         guard let panel, let viewModel, let contentController else { return }
-        let preservedSplitRatio = contentController.presentationSnapshot.splitRatio
+        let previousLayout = contentController.presentationSnapshot
         contentController.update(with: viewModel)
-        panel.setFrame(resizedFrame(from: panel.frame, fittingSize: contentController.desiredContentSize), display: true)
+        let preservesLayoutMode = previousLayout.layoutMode == contentController.presentationSnapshot.layoutMode
+        let fittingSize = preservesLayoutMode
+            ? contentController.desiredContentSize(preservingSplitRatio: previousLayout.splitRatio)
+            : contentController.desiredContentSize
+        panel.setFrame(resizedFrame(from: panel.frame, fittingSize: fittingSize), display: true)
         panel.contentView?.layoutSubtreeIfNeeded()
-        contentController.setSplitRatio(preservedSplitRatio)
+        if preservesLayoutMode {
+            contentController.setSplitRatio(previousLayout.splitRatio)
+        } else {
+            contentController.applyPendingSplitLayout()
+        }
     }
 
     func hide(notify: Bool = true) {
@@ -148,7 +162,7 @@ final class PopupWindowManager: NSObject, NSWindowDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = false
-        panel.minSize = NSSize(width: 320, height: 260)
+        panel.minSize = TranslationPanelLayoutPolicy.compactMinimumSize
         panel.delegate = self
         return panel
     }
@@ -169,8 +183,8 @@ final class PopupWindowManager: NSObject, NSWindowDelegate {
         let screen = NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let size = NSSize(
-            width: min(max(fittingSize.width, 340), min(760, visible.width - 40)),
-            height: min(max(fittingSize.height, 260), visible.height - 40)
+            width: min(max(fittingSize.width, 360), min(760, visible.width - 40)),
+            height: min(max(fittingSize.height, 190), visible.height - 40)
         )
         var origin = NSPoint(x: point.x + 8, y: point.y - size.height - 8)
         if origin.x + size.width > visible.maxX { origin.x = point.x - size.width - 8 }
@@ -184,8 +198,8 @@ final class PopupWindowManager: NSObject, NSWindowDelegate {
         let screen = NSScreen.screens.first { $0.frame.intersects(current) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? current
         let size = NSSize(
-            width: min(max(fittingSize.width, 340), min(760, visible.width - 40)),
-            height: min(max(fittingSize.height, 260), visible.height - 40)
+            width: min(max(fittingSize.width, 360), min(760, visible.width - 40)),
+            height: min(max(fittingSize.height, 190), visible.height - 40)
         )
         var origin = NSPoint(x: current.minX, y: current.maxY - size.height)
         origin.x = min(max(origin.x, visible.minX), visible.maxX - size.width)

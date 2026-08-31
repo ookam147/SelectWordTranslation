@@ -35,9 +35,159 @@ final class TranslationPopupViewModel: ObservableObject {
     }
 }
 
+enum TranslationPanelLayoutMode: Equatable, Sendable {
+    case compactStacked
+    case sideBySide
+}
+
+struct TranslationPanelLayout: Equatable {
+    let mode: TranslationPanelLayoutMode
+    let contentSize: NSSize
+    let originalPaneExtent: CGFloat
+    let resultPaneExtent: CGFloat
+
+    var defaultSplitRatio: CGFloat {
+        guard mode == .compactStacked else { return 0.5 }
+        let total = originalPaneExtent + resultPaneExtent
+        return total > 0 ? originalPaneExtent / total : 0.5
+    }
+}
+
+@MainActor
+struct TranslationPanelLayoutPolicy {
+    static let compactMinimumSize = NSSize(width: 360, height: 190)
+    static let compactMaximumSize = NSSize(width: 520, height: 420)
+    static let sideBySideWidth: CGFloat = 760
+    static let sideBySideMinimumHeight: CGFloat = 320
+    static let sideBySideMaximumHeight: CGFloat = 560
+    static let compactMinimumPaneExtent: CGFloat = 64
+    static let sideBySideMinimumPaneExtent: CGFloat = 240
+
+    private static let horizontalChrome: CGFloat = 40
+    private static let verticalChrome: CGFloat = 63
+    private static let paneHeaderHeight: CGFloat = 17
+    private static let paneSpacing: CGFloat = 8
+    private static let textVerticalInset: CGFloat = 8
+    private static let statusRowHeight: CGFloat = 20
+    private static let compactLineLimit: CGFloat = 6
+
+    static func layout(
+        originalText: String,
+        resultText: String,
+        statusRowVisible: Bool,
+        font: NSFont = .systemFont(ofSize: NSFont.systemFontSize)
+    ) -> TranslationPanelLayout {
+        let maximumTextWidth = compactMaximumSize.width - horizontalChrome
+        let originalCompactHeight = measuredTextHeight(originalText, width: maximumTextWidth, font: font)
+        let resultCompactHeight = measuredTextHeight(resultText, width: maximumTextWidth, font: font)
+        let lineHeight = max(1, defaultLineHeight(font: font))
+        let originalLines = ceil(originalCompactHeight / lineHeight)
+        let resultLines = ceil(resultCompactHeight / lineHeight)
+
+        if originalLines > compactLineLimit || resultLines > compactLineLimit {
+            return sideBySideLayout(
+                originalText: originalText,
+                resultText: resultText,
+                statusRowVisible: statusRowVisible,
+                font: font
+            )
+        }
+
+        let longestLineWidth = max(
+            longestUnwrappedLineWidth(originalText, font: font),
+            longestUnwrappedLineWidth(resultText, font: font)
+        )
+        let width = clamp(
+            ceil(longestLineWidth + horizontalChrome),
+            minimum: compactMinimumSize.width,
+            maximum: compactMaximumSize.width
+        )
+        let textWidth = width - horizontalChrome
+        let originalPane = paneExtent(
+            textHeight: measuredTextHeight(originalText, width: textWidth, font: font),
+            statusRowVisible: false
+        )
+        let resultPane = paneExtent(
+            textHeight: measuredTextHeight(resultText, width: textWidth, font: font),
+            statusRowVisible: statusRowVisible
+        )
+        let height = clamp(
+            ceil(verticalChrome + originalPane + resultPane),
+            minimum: compactMinimumSize.height,
+            maximum: compactMaximumSize.height
+        )
+        return TranslationPanelLayout(
+            mode: .compactStacked,
+            contentSize: NSSize(width: width, height: height),
+            originalPaneExtent: originalPane,
+            resultPaneExtent: resultPane
+        )
+    }
+
+    private static func sideBySideLayout(
+        originalText: String,
+        resultText: String,
+        statusRowVisible: Bool,
+        font: NSFont
+    ) -> TranslationPanelLayout {
+        let paneTextWidth = (sideBySideWidth - horizontalChrome) / 2
+        let originalPane = paneExtent(
+            textHeight: measuredTextHeight(originalText, width: paneTextWidth, font: font),
+            statusRowVisible: false
+        )
+        let resultPane = paneExtent(
+            textHeight: measuredTextHeight(resultText, width: paneTextWidth, font: font),
+            statusRowVisible: statusRowVisible
+        )
+        let height = clamp(
+            ceil(verticalChrome + max(originalPane, resultPane)),
+            minimum: sideBySideMinimumHeight,
+            maximum: sideBySideMaximumHeight
+        )
+        return TranslationPanelLayout(
+            mode: .sideBySide,
+            contentSize: NSSize(width: sideBySideWidth, height: height),
+            originalPaneExtent: originalPane,
+            resultPaneExtent: resultPane
+        )
+    }
+
+    private static func paneExtent(textHeight: CGFloat, statusRowVisible: Bool) -> CGFloat {
+        let textExtent = max(defaultLineHeight(font: .systemFont(ofSize: NSFont.systemFontSize)), textHeight)
+            + textVerticalInset
+        let statusExtent = statusRowVisible ? statusRowHeight + paneSpacing : 0
+        return max(
+            compactMinimumPaneExtent,
+            paneHeaderHeight + paneSpacing + statusExtent + textExtent
+        )
+    }
+
+    private static func measuredTextHeight(_ text: String, width: CGFloat, font: NSFont) -> CGFloat {
+        guard !text.isEmpty else { return defaultLineHeight(font: font) }
+        let bounds = (text as NSString).boundingRect(
+            with: NSSize(width: max(1, width), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font]
+        )
+        return max(defaultLineHeight(font: font), ceil(bounds.height))
+    }
+
+    private static func longestUnwrappedLineWidth(_ text: String, font: NSFont) -> CGFloat {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        return lines.map { (String($0) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+    }
+
+    private static func defaultLineHeight(font: NSFont) -> CGFloat {
+        ceil(font.ascender - font.descender + font.leading)
+    }
+
+    private static func clamp(_ value: CGFloat, minimum: CGFloat, maximum: CGFloat) -> CGFloat {
+        min(max(value, minimum), maximum)
+    }
+}
+
 @MainActor
 final class TranslationPanelContentController: NSViewController, NSSplitViewDelegate {
-    private static let minimumPaneHeight: CGFloat = 100
     private weak var model: TranslationPopupViewModel?
     private let modelLabel = NSTextField(labelWithString: "")
     private let languagePopup = NSPopUpButton()
@@ -54,6 +204,13 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
     private let splitView = NSSplitView()
     private let originalPane = NSStackView()
     private let resultPane = NSStackView()
+    private var compactPaneConstraints: [NSLayoutConstraint] = []
+    private var sideBySidePaneConstraints: [NSLayoutConstraint] = []
+    private var currentLayout = TranslationPanelLayoutPolicy.layout(
+        originalText: "",
+        resultText: "",
+        statusRowVisible: false
+    )
     private var shouldResetSplitOnNextLayout = true
 
     override func loadView() {
@@ -72,8 +229,8 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
         originalScrollView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         resultScrollView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         NSLayoutConstraint.activate([
-            originalScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 52),
-            resultScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 60)
+            originalScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
+            resultScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 28)
         ])
 
         let header = makeHeader()
@@ -100,10 +257,23 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
         splitView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         splitView.addArrangedSubview(originalPane)
         splitView.addArrangedSubview(resultPane)
-        NSLayoutConstraint.activate([
-            originalPane.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumPaneHeight),
-            resultPane.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumPaneHeight)
-        ])
+        compactPaneConstraints = [
+            originalPane.heightAnchor.constraint(
+                greaterThanOrEqualToConstant: TranslationPanelLayoutPolicy.compactMinimumPaneExtent
+            ),
+            resultPane.heightAnchor.constraint(
+                greaterThanOrEqualToConstant: TranslationPanelLayoutPolicy.compactMinimumPaneExtent
+            )
+        ]
+        sideBySidePaneConstraints = [
+            originalPane.widthAnchor.constraint(
+                greaterThanOrEqualToConstant: TranslationPanelLayoutPolicy.sideBySideMinimumPaneExtent
+            ),
+            resultPane.widthAnchor.constraint(
+                greaterThanOrEqualToConstant: TranslationPanelLayoutPolicy.sideBySideMinimumPaneExtent
+            )
+        ]
+        NSLayoutConstraint.activate(compactPaneConstraints)
 
         let stack = NSStackView(views: [
             header,
@@ -133,7 +303,6 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
 
     func update(with model: TranslationPopupViewModel, resetSplit: Bool = false) {
         loadViewIfNeeded()
-        if resetSplit { shouldResetSplitOnNextLayout = true }
         self.model = model
         modelLabel.stringValue = model.modelName.isEmpty ? L10n.appName : model.modelName
         originalTextView.string = model.originalText
@@ -167,17 +336,42 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
             resultTextView.string = ""
         }
         copyButton.isEnabled = !model.translatedText.isEmpty
+        let nextLayout = TranslationPanelLayoutPolicy.layout(
+            originalText: model.originalText,
+            resultText: resultTextView.string,
+            statusRowVisible: !statusStack.isHidden,
+            font: originalTextView.font ?? .systemFont(ofSize: NSFont.systemFontSize)
+        )
+        let modeChanged = nextLayout.mode != currentLayout.mode
+        currentLayout = nextLayout
+        if modeChanged {
+            splitView.isVertical = nextLayout.mode == .sideBySide
+            NSLayoutConstraint.deactivate(nextLayout.mode == .sideBySide ? compactPaneConstraints : sideBySidePaneConstraints)
+            NSLayoutConstraint.activate(nextLayout.mode == .sideBySide ? sideBySidePaneConstraints : compactPaneConstraints)
+        }
+        if resetSplit || modeChanged { shouldResetSplitOnNextLayout = true }
         originalTextView.scrollToBeginningOfDocument(nil)
         resultTextView.scrollToBeginningOfDocument(nil)
     }
 
     var desiredContentSize: NSSize {
-        guard let model else { return NSSize(width: 400, height: 260) }
-        let textLength = model.originalText.count + model.translatedText.count
-        let width: CGFloat = textLength > 240 ? 600 : 420
-        let estimatedLines = min(18, max(2, textLength / (textLength > 240 ? 80 : 52)))
-        let height = min(560, max(260, 190 + CGFloat(estimatedLines) * 18))
-        return NSSize(width: width, height: height)
+        currentLayout.contentSize
+    }
+
+    func desiredContentSize(preservingSplitRatio ratio: CGFloat) -> NSSize {
+        loadViewIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        let smallerFraction = min(max(ratio, 0.001), max(1 - ratio, 0.001))
+        let requiredSplitExtent = minimumPaneExtent / smallerFraction + splitView.dividerThickness
+        var size = currentLayout.contentSize
+        if splitView.isVertical {
+            let nonSplitWidth = max(0, view.bounds.width - splitView.bounds.width)
+            size.width = max(size.width, ceil(nonSplitWidth + requiredSplitExtent))
+        } else {
+            let nonSplitHeight = max(0, view.bounds.height - splitView.bounds.height)
+            size.height = max(size.height, ceil(nonSplitHeight + requiredSplitExtent))
+        }
+        return size
     }
 
     func clearTextStorage() {
@@ -186,6 +380,15 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
         statusLabel.stringValue = ""
         progressIndicator.stopAnimation(nil)
         model = nil
+        currentLayout = TranslationPanelLayoutPolicy.layout(
+            originalText: "",
+            resultText: "",
+            statusRowVisible: false
+        )
+        splitView.isVertical = false
+        NSLayoutConstraint.deactivate(sideBySidePaneConstraints)
+        NSLayoutConstraint.activate(compactPaneConstraints)
+        shouldResetSplitOnNextLayout = true
     }
 
     var presentationSnapshot: TranslationPanelPresentationSnapshot {
@@ -194,6 +397,11 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
             isProgressIndicatorVisible: !progressIndicator.isHidden,
             statusText: statusLabel.stringValue,
             resultText: resultTextView.string,
+            layoutMode: currentLayout.mode,
+            targetContentSize: currentLayout.contentSize,
+            isVerticalSplit: splitView.isVertical,
+            originalPaneWidth: originalPane.frame.width,
+            resultPaneWidth: resultPane.frame.width,
             originalPaneHeight: originalPane.frame.height,
             resultPaneHeight: resultPane.frame.height,
             splitRatio: currentSplitRatio
@@ -217,7 +425,7 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
         constrainMinCoordinate proposedMinimumPosition: CGFloat,
         ofSubviewAt dividerIndex: Int
     ) -> CGFloat {
-        max(proposedMinimumPosition, Self.minimumPaneHeight)
+        max(proposedMinimumPosition, minimumPaneExtent)
     }
 
     func splitView(
@@ -227,7 +435,7 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
     ) -> CGFloat {
         min(
             proposedMaximumPosition,
-            splitView.bounds.height - splitView.dividerThickness - Self.minimumPaneHeight
+            splitViewExtent - splitView.dividerThickness - minimumPaneExtent
         )
     }
 
@@ -279,25 +487,37 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
     }
 
     private var currentSplitRatio: CGFloat {
-        let contentHeight = originalPane.frame.height + resultPane.frame.height
-        guard contentHeight > 0 else { return 0.5 }
-        return originalPane.frame.height / contentHeight
+        let originalExtent = splitView.isVertical ? originalPane.frame.width : originalPane.frame.height
+        let resultExtent = splitView.isVertical ? resultPane.frame.width : resultPane.frame.height
+        let totalExtent = originalExtent + resultExtent
+        guard totalExtent > 0 else { return currentLayout.defaultSplitRatio }
+        return originalExtent / totalExtent
     }
 
     private func applyPendingSplitResetIfPossible() {
         guard shouldResetSplitOnNextLayout,
-              splitView.bounds.height >= Self.minimumPaneHeight * 2 + splitView.dividerThickness else { return }
+              splitViewExtent >= minimumPaneExtent * 2 + splitView.dividerThickness else { return }
         shouldResetSplitOnNextLayout = false
-        setSplitPosition(ratio: 0.5)
+        setSplitPosition(ratio: currentLayout.defaultSplitRatio)
     }
 
     private func setSplitPosition(ratio: CGFloat) {
-        let availableHeight = splitView.bounds.height - splitView.dividerThickness
-        guard availableHeight > 0 else { return }
-        let minimumRatio = min(0.5, Self.minimumPaneHeight / availableHeight)
+        let availableExtent = splitViewExtent - splitView.dividerThickness
+        guard availableExtent > 0 else { return }
+        let minimumRatio = min(0.5, minimumPaneExtent / availableExtent)
         let clampedRatio = min(max(ratio, minimumRatio), 1 - minimumRatio)
-        splitView.setPosition(availableHeight * clampedRatio, ofDividerAt: 0)
+        splitView.setPosition(availableExtent * clampedRatio, ofDividerAt: 0)
         splitView.adjustSubviews()
+    }
+
+    private var splitViewExtent: CGFloat {
+        splitView.isVertical ? splitView.bounds.width : splitView.bounds.height
+    }
+
+    private var minimumPaneExtent: CGFloat {
+        splitView.isVertical
+            ? TranslationPanelLayoutPolicy.sideBySideMinimumPaneExtent
+            : TranslationPanelLayoutPolicy.compactMinimumPaneExtent
     }
 
     private func makeSectionHeader(title: String) -> NSStackView {
@@ -375,6 +595,11 @@ struct TranslationPanelPresentationSnapshot: Equatable {
     let isProgressIndicatorVisible: Bool
     let statusText: String
     let resultText: String
+    let layoutMode: TranslationPanelLayoutMode
+    let targetContentSize: NSSize
+    let isVerticalSplit: Bool
+    let originalPaneWidth: CGFloat
+    let resultPaneWidth: CGFloat
     let originalPaneHeight: CGFloat
     let resultPaneHeight: CGFloat
     let splitRatio: CGFloat

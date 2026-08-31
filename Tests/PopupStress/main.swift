@@ -28,13 +28,16 @@ private struct PopupStressRunner {
             modelName: "",
             selectedLanguage: .defaultLanguage
         )
-        verifySplitRatioAcrossResize(manager: manager, model: model)
+        verifyDynamicLayoutTransitions(manager: manager, model: model)
         var warmedResidentSize: UInt64?
 
         for index in 0..<iterations {
             autoreleasepool {
                 verifySelectionCycle(pasteboard: selectionPasteboard, iteration: index)
-                model.originalText = String(repeating: "source ", count: wordCount)
+                let usesLongLayout = index.isMultiple(of: 2)
+                model.originalText = usesLongLayout
+                    ? longText(prefix: "source", lineCount: 12, wordsPerLine: max(8, wordCount / 12))
+                    : "Short source \(index)"
                 model.state = .loading
                 model.modelName = "stress-model"
                 manager.show(viewModel: model, at: NSPoint(x: 300, y: 300))
@@ -50,32 +53,48 @@ private struct PopupStressRunner {
                 guard layoutSnapshot.isProgressIndicatorVisible else {
                     fatalError("Loading indicator was not visible")
                 }
-                verifyBalancedLayout(layoutSnapshot, context: "new translation at iteration \(index)")
+                verifyLayout(
+                    layoutSnapshot,
+                    expectedMode: usesLongLayout ? .sideBySide : .compactStacked,
+                    context: "new translation at iteration \(index)"
+                )
 
                 if index == 0 {
                     controller.setSplitRatio(0)
                     layoutSnapshot = controller.presentationSnapshot
-                    guard layoutSnapshot.originalPaneHeight >= 99.5,
-                          layoutSnapshot.resultPaneHeight >= 99.5 else {
-                        fatalError("Split panes could collapse below their minimum height")
+                    guard layoutSnapshot.originalPaneWidth >= 239.5,
+                          layoutSnapshot.resultPaneWidth >= 239.5 else {
+                        fatalError("Side-by-side panes could collapse below their minimum width")
                     }
                 }
 
                 controller.setSplitRatio(0.4)
                 let draggedRatio = controller.presentationSnapshot.splitRatio
-                guard abs(draggedRatio - 0.4) <= 0.02 else {
+                guard !usesLongLayout || abs(draggedRatio - 0.4) <= 0.02 else {
                     fatalError("Dragged split ratio was not applied")
                 }
 
-                model.state = .result(String(repeating: "translation ", count: wordCount))
+                model.state = .result(
+                    usesLongLayout
+                        ? longText(prefix: "translation", lineCount: 12, wordsPerLine: max(8, wordCount / 12))
+                        : "Short translation \(index)"
+                )
                 manager.refreshLayout()
                 let resultSnapshot = controller.presentationSnapshot
                 guard !resultSnapshot.isStatusRowVisible, !resultSnapshot.isProgressIndicatorVisible else {
                     fatalError("Loading UI remained visible after translation at iteration \(index)")
                 }
                 guard abs(resultSnapshot.splitRatio - draggedRatio) <= 0.02 else {
-                    fatalError("Split ratio changed after translation at iteration \(index)")
+                    fatalError(
+                        "Split ratio changed after translation at iteration \(index): "
+                            + "\(draggedRatio) -> \(resultSnapshot.splitRatio)"
+                    )
                 }
+                verifyLayout(
+                    resultSnapshot,
+                    expectedMode: usesLongLayout ? .sideBySide : .compactStacked,
+                    context: "completed translation at iteration \(index)"
+                )
 
                 manager.show(viewModel: model, at: NSPoint(x: 300, y: 300), preservePosition: true)
                 guard abs(controller.presentationSnapshot.splitRatio - draggedRatio) <= 0.02 else {
@@ -177,6 +196,12 @@ private struct PopupStressRunner {
               snapshot.resultText == "translated" else {
             fatalError("Result presentation was incorrect")
         }
+        guard snapshot.layoutMode == .compactStacked,
+              !snapshot.isVerticalSplit,
+              snapshot.targetContentSize.width >= 360,
+              snapshot.targetContentSize.height >= 190 else {
+            fatalError("Short result did not use the compact layout")
+        }
 
         model.state = .loading
         controller.update(with: model)
@@ -206,11 +231,31 @@ private struct PopupStressRunner {
     }
 
     @MainActor
-    private static func verifySplitRatioAcrossResize(
+    private static func verifyDynamicLayoutTransitions(
         manager: PopupWindowManager,
         model: TranslationPopupViewModel
     ) {
-        model.originalText = String(repeating: "source ", count: 80)
+        let policyFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let sixLineLayout = TranslationPanelLayoutPolicy.layout(
+            originalText: longText(prefix: "six", lineCount: 6, wordsPerLine: 1),
+            resultText: "",
+            statusRowVisible: true,
+            font: policyFont
+        )
+        guard sixLineLayout.mode == .compactStacked else {
+            fatalError("Six rendered lines should remain compact")
+        }
+        let sevenLineLayout = TranslationPanelLayoutPolicy.layout(
+            originalText: longText(prefix: "seven", lineCount: 7, wordsPerLine: 1),
+            resultText: "",
+            statusRowVisible: true,
+            font: policyFont
+        )
+        guard sevenLineLayout.mode == .sideBySide else {
+            fatalError("More than six rendered lines should use side-by-side layout")
+        }
+
+        model.originalText = "Short source"
         model.state = .loading
         model.modelName = "resize-model"
         manager.show(viewModel: model, at: NSPoint(x: 300, y: 300))
@@ -218,30 +263,89 @@ private struct PopupStressRunner {
               let controller = panel.contentViewController as? TranslationPanelContentController else {
             fatalError("Resize test popup was unavailable")
         }
-
-        controller.setSplitRatio(0.45)
-        let draggedRatio = controller.presentationSnapshot.splitRatio
-        guard abs(draggedRatio - 0.45) <= 0.02 else {
-            fatalError("Resize test split ratio was not applied")
+        var snapshot = controller.presentationSnapshot
+        verifyLayout(snapshot, expectedMode: .compactStacked, context: "short loading text")
+        guard panel.frame.width >= 359.5,
+              panel.frame.height >= 189.5,
+              panel.frame.width <= 520.5,
+              panel.frame.height <= 420.5 else {
+            fatalError("Compact popup size was outside its bounds")
         }
 
-        model.state = .result(String(repeating: "translation ", count: 500))
+        model.state = .result(longText(prefix: "short-result", lineCount: 4, wordsPerLine: 2))
+        let loadingSize = panel.frame.size
         manager.refreshLayout()
-        guard abs(controller.presentationSnapshot.splitRatio - draggedRatio) <= 0.02 else {
-            fatalError("Split ratio changed while the popup resized")
+        snapshot = controller.presentationSnapshot
+        verifyLayout(snapshot, expectedMode: .compactStacked, context: "short result")
+        guard panel.frame.height >= loadingSize.height else {
+            fatalError("Compact popup did not grow for its result")
+        }
+
+        model.state = .result(longText(prefix: "translation", lineCount: 8, wordsPerLine: 4))
+        manager.refreshLayout()
+        snapshot = controller.presentationSnapshot
+        verifyLayout(snapshot, expectedMode: .sideBySide, context: "result-driven mode switch")
+        guard abs(snapshot.splitRatio - 0.5) <= 0.02 else {
+            fatalError("Side-by-side layout did not reset to an even split")
+        }
+
+        controller.setSplitRatio(0.4)
+        let draggedRatio = controller.presentationSnapshot.splitRatio
+        model.state = .result(longText(prefix: "updated", lineCount: 10, wordsPerLine: 4))
+        manager.refreshLayout()
+        snapshot = controller.presentationSnapshot
+        guard abs(snapshot.splitRatio - draggedRatio) <= 0.02 else {
+            fatalError("Side-by-side ratio changed while its mode stayed the same")
+        }
+
+        model.originalText = "New short source"
+        model.state = .loading
+        manager.show(viewModel: model, at: NSPoint(x: 300, y: 300))
+        snapshot = controller.presentationSnapshot
+        verifyLayout(snapshot, expectedMode: .compactStacked, context: "new compact translation")
+        controller.setSplitRatio(0)
+        snapshot = controller.presentationSnapshot
+        guard snapshot.originalPaneHeight >= 63.5,
+              snapshot.resultPaneHeight >= 63.5 else {
+            fatalError("Compact panes could collapse below their minimum height")
         }
         manager.hide(notify: false)
     }
 
-    private static func verifyBalancedLayout(
+    private static func verifyLayout(
         _ snapshot: TranslationPanelPresentationSnapshot,
+        expectedMode: TranslationPanelLayoutMode,
         context: String
     ) {
-        guard snapshot.originalPaneHeight >= 99.5,
-              snapshot.resultPaneHeight >= 99.5,
-              abs(snapshot.splitRatio - 0.5) <= 0.02 else {
-            fatalError("Popup panes were not balanced for \(context)")
+        guard snapshot.layoutMode == expectedMode,
+              snapshot.isVerticalSplit == (expectedMode == .sideBySide) else {
+            fatalError("Popup used the wrong layout mode for \(context)")
         }
+        switch expectedMode {
+        case .compactStacked:
+            guard snapshot.originalPaneHeight >= 63.5,
+                  snapshot.resultPaneHeight >= 63.5,
+                  snapshot.targetContentSize.width >= 360,
+                  snapshot.targetContentSize.width <= 520,
+                  snapshot.targetContentSize.height >= 190,
+                  snapshot.targetContentSize.height <= 420 else {
+                fatalError("Compact layout was outside its constraints for \(context)")
+            }
+        case .sideBySide:
+            guard snapshot.originalPaneWidth >= 239.5,
+                  snapshot.resultPaneWidth >= 239.5,
+                  snapshot.targetContentSize.width == 760,
+                  snapshot.targetContentSize.height >= 320,
+                  snapshot.targetContentSize.height <= 560 else {
+                fatalError("Side-by-side layout was outside its constraints for \(context)")
+            }
+        }
+    }
+
+    private static func longText(prefix: String, lineCount: Int, wordsPerLine: Int) -> String {
+        (0..<lineCount).map { line in
+            Array(repeating: "\(prefix)-\(line)", count: wordsPerLine).joined(separator: " ")
+        }.joined(separator: "\n")
     }
 
     private static func residentSize() -> UInt64 {
