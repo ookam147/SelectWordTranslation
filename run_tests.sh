@@ -10,6 +10,7 @@ swiftc \
   -parse-as-library \
   Sources/SelectWordTranslation/AppLanguage.swift \
   Sources/SelectWordTranslation/CredentialStore.swift \
+  Sources/SelectWordTranslation/TextSelectionManager.swift \
   Sources/SelectWordTranslation/TranslationService.swift \
   Sources/SelectWordTranslation/ModelManager.swift \
   Tests/SelectWordTranslationTests/main.swift \

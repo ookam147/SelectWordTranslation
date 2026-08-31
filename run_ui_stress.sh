@@ -9,6 +9,7 @@ swiftc \
   -swift-version 6 \
   -parse-as-library \
   Sources/SelectWordTranslation/AppLanguage.swift \
+  Sources/SelectWordTranslation/TextSelectionManager.swift \
   Sources/SelectWordTranslation/TranslationService.swift \
   Sources/SelectWordTranslation/TranslationPopupView.swift \
   Sources/SelectWordTranslation/PopupWindowManager.swift \

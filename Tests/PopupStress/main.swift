@@ -21,6 +21,7 @@ private struct PopupStressRunner {
         let iterations = Int(environment["SWT_STRESS_ITERATIONS"] ?? "500") ?? 500
         let wordCount = Int(environment["SWT_STRESS_WORDS"] ?? "500") ?? 500
         let warmupIteration = max(1, iterations / 5)
+        let selectionPasteboard = NSPasteboard(name: .init("SelectionStress-\(UUID().uuidString)"))
         let model = TranslationPopupViewModel(
             originalText: "",
             state: .idle,
@@ -32,6 +33,7 @@ private struct PopupStressRunner {
 
         for index in 0..<iterations {
             autoreleasepool {
+                verifySelectionCycle(pasteboard: selectionPasteboard, iteration: index)
                 model.originalText = String(repeating: "source ", count: wordCount)
                 model.state = .loading
                 model.modelName = "stress-model"
@@ -99,6 +101,48 @@ private struct PopupStressRunner {
         }
         manager.dispose()
         print("Popup stress test passed (\(iterations) open/close cycles).")
+    }
+
+    @MainActor
+    private static func verifySelectionCycle(pasteboard: NSPasteboard, iteration: Int) {
+        let customType = NSPasteboard.PasteboardType("com.zwalking.stress.custom")
+        let originalItem = NSPasteboardItem()
+        originalItem.setString("original", forType: .string)
+        originalItem.setData(Data([0, 1, 2, 3]), forType: customType)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([originalItem])
+        let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
+
+        pasteboard.clearContents()
+        let copiedChangeCount = pasteboard.changeCount
+        let expected: String
+        let bundleIdentifier: String
+        if iteration.isMultiple(of: 2) {
+            expected = "微信选中文字"
+            bundleIdentifier = "com.tencent.xinWeChat"
+            pasteboard.writeObjects([expected as NSString])
+        } else {
+            expected = "测试文件-\(iteration).pdf"
+            bundleIdentifier = "com.apple.finder"
+            let item = NSPasteboardItem()
+            item.setString(
+                URL(fileURLWithPath: "/private/tmp/\(expected)").absoluteString,
+                forType: .fileURL
+            )
+            pasteboard.writeObjects([item])
+        }
+
+        guard PasteboardSelectionParser.text(
+            from: pasteboard,
+            sourceBundleIdentifier: bundleIdentifier
+        ) == expected else {
+            fatalError("Selection parser failed at iteration \(iteration)")
+        }
+        guard snapshot.restore(to: pasteboard, ifChangeCountIs: copiedChangeCount),
+              pasteboard.string(forType: .string) == "original",
+              pasteboard.data(forType: customType) == Data([0, 1, 2, 3]) else {
+            fatalError("Pasteboard restoration failed at iteration \(iteration)")
+        }
     }
 
     @MainActor
