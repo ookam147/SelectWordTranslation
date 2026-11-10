@@ -9,6 +9,7 @@ enum L10n {
     static var ready: String { text("Ready") }
     static var testing: String { text("Testing connection…") }
     static var translating: String { text("Translating…") }
+    static var thinking: String { text("Thinking…") }
     static var original: String { text("Original") }
     static var result: String { text("Result") }
     static var copy: String { text("Copy Translation") }
@@ -18,9 +19,11 @@ enum L10n {
     static var noSelection: String { text("No text is selected.") }
     static var selectionTooLong: String { text("The selection exceeds the 20,000 character limit.") }
     static var accessibilityRequired: String { text("Accessibility permission is required to read selected text.") }
-    static var openSettings: String { text("Open System Settings") }
-    static var cancel: String { text("Cancel") }
     static var error: String { text("Error") }
+
+    static func seconds(_ value: Int) -> String {
+        String(format: text("Within %d seconds"), locale: .current, value)
+    }
 
     static func failed(_ message: String) -> String {
         String(format: text("Failed: %@"), locale: .current, message)

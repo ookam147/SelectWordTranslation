@@ -58,8 +58,11 @@ private final class TestSourceApplicationProvider: SourceApplicationProviding {
 @MainActor
 private final class TestAccessibilityReader: AccessibilitySelectionReading {
     var text: String?
+    var isWebContent = false
     init(text: String?) { self.text = text }
-    func selectedText(for application: SourceApplicationSnapshot) -> String? { text }
+    func selectedText(for application: SourceApplicationSnapshot) -> AccessibilitySelection? {
+        text.map { AccessibilitySelection(text: $0, isWebContent: isWebContent) }
+    }
 }
 
 @MainActor
@@ -74,6 +77,20 @@ private final class TestClipboardReader: ClipboardSelectionReading {
 }
 
 @MainActor
+private final class TestRecentClipboard: RecentClipboardProviding {
+    var text: String?
+    private(set) var ignoreDepth = 0
+    init(text: String?) { self.text = text }
+    private(set) var lastWindow: TimeInterval?
+    func recentText(copiedFrom application: SourceApplicationSnapshot, within window: TimeInterval) -> String? {
+        lastWindow = window
+        return window > 0 ? text : nil
+    }
+    func beginIgnoringChanges() { ignoreDepth += 1 }
+    func endIgnoringChanges() { ignoreDepth -= 1 }
+}
+
+@MainActor
 private final class TestCopyCommandSender: SelectionCopyCommandSending {
     let operation: @MainActor (SourceApplicationSnapshot) async throws -> Bool
     init(operation: @escaping @MainActor (SourceApplicationSnapshot) async throws -> Bool) {
@@ -81,6 +98,28 @@ private final class TestCopyCommandSender: SelectionCopyCommandSending {
     }
     func sendCopy(to application: SourceApplicationSnapshot) async throws -> Bool {
         try await operation(application)
+    }
+}
+
+@MainActor
+private final class PartialRecorder {
+    var values: [TranslationProgress] = []
+}
+
+private extension URLRequest {
+    var bodyData: Data {
+        if let httpBody { return httpBody }
+        guard let stream = httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(buffer, count: count)
+        }
+        return data
     }
 }
 
@@ -94,12 +133,16 @@ private struct CoreTestRunner {
             try credentialMigrationTest()
             try await translationTests()
             try await selectionCompatibilityTests()
+            try await streamingTests()
+            try textProcessingTests()
             try await MainActor.run {
+                try cacheTests()
+                try preferencesTests()
                 try pasteboardParserTests()
                 try modelStartupTest()
                 try requestGenerationTest()
             }
-            print("All core tests passed (10 groups).")
+            print("All core tests passed (14 groups).")
         } catch {
             fputs("Core tests failed: \(error)\n", stderr)
             exit(1)
@@ -121,7 +164,7 @@ private struct CoreTestRunner {
             selectedMarkerText: { _ in "marker" },
             parent: { _ in nil }
         )
-        try expect(directResolver.resolve(startingAt: 0) == "direct", "Direct AX text should have priority")
+        try expect(directResolver.resolve(startingAt: 0)?.text == "direct", "Direct AX text should have priority")
 
         let rangeResolver = AccessibilitySelectionResolver<Int>(
             selectedText: { _ in nil },
@@ -129,7 +172,7 @@ private struct CoreTestRunner {
             selectedMarkerText: { _ in "marker" },
             parent: { _ in nil }
         )
-        try expect(rangeResolver.resolve(startingAt: 0) == "range", "AX range text should be the second strategy")
+        try expect(rangeResolver.resolve(startingAt: 0)?.text == "range", "AX range text should be the second strategy")
 
         let markerResolver = AccessibilitySelectionResolver<Int>(
             selectedText: { _ in nil },
@@ -137,7 +180,17 @@ private struct CoreTestRunner {
             selectedMarkerText: { $0 == 0 ? "marker" : nil },
             parent: { _ in nil }
         )
-        try expect(markerResolver.resolve(startingAt: 0) == "marker", "AX marker text should support web content")
+        try expect(markerResolver.resolve(startingAt: 0)?.text == "marker", "AX marker text should support web content")
+        try expect(markerResolver.resolve(startingAt: 0)?.isWebContent == true, "Marker text comes from web content")
+        try expect(directResolver.resolve(startingAt: 0)?.isWebContent == false, "Native AX text is not web content")
+        let webAreaResolver = AccessibilitySelectionResolver<Int>(
+            selectedText: { _ in "web" },
+            selectedRangeText: { _ in nil },
+            selectedMarkerText: { _ in nil },
+            parent: { _ in nil },
+            isWebArea: { _ in true }
+        )
+        try expect(webAreaResolver.resolve(startingAt: 0)?.isWebContent == true, "AXWebArea text is web content")
 
         let parentResolver = AccessibilitySelectionResolver<Int>(
             selectedText: { $0 == 2 ? "parent" : nil },
@@ -145,7 +198,7 @@ private struct CoreTestRunner {
             selectedMarkerText: { _ in nil },
             parent: { $0 < 2 ? $0 + 1 : nil }
         )
-        try expect(parentResolver.resolve(startingAt: 0) == "parent", "AX lookup should walk parent elements")
+        try expect(parentResolver.resolve(startingAt: 0)?.text == "parent", "AX lookup should walk parent elements")
     }
 
     private static func endpointTests() throws {
@@ -212,20 +265,109 @@ private struct CoreTestRunner {
         let sourceProvider = TestSourceApplicationProvider(application: source)
         let accessibilityReader = TestAccessibilityReader(text: "AX selection")
         let clipboardReader = TestClipboardReader(text: "clipboard selection")
+        let recentClipboard = TestRecentClipboard(text: "recent copy")
         let manager = TextSelectionManager(
             sourceApplications: sourceProvider,
             accessibilityReader: accessibilityReader,
             clipboardReader: clipboardReader,
+            recentClipboard: recentClipboard,
             isAccessibilityTrusted: { true }
         )
         let accessibilityResult = try await manager.selectedText()
         try expect(accessibilityResult == "AX selection", "Accessibility selection should have priority")
         try expect(clipboardReader.callCount == 0, "Clipboard should not run after a successful AX lookup")
 
+        accessibilityReader.isWebContent = true
+        let webResult = try await manager.selectedText()
+        try expect(webResult == "clipboard selection", "Web selections should prefer a real copy to keep paragraphs")
+        try expect(clipboardReader.callCount == 1, "Web selections should copy once")
+        try expect(recentClipboard.ignoreDepth == 0, "Clipboard monitoring should resume after a web copy")
+        clipboardReader.text = nil
+        let webFallback = try await manager.selectedText()
+        try expect(webFallback == "AX selection", "Web selections should fall back to AX text when copying fails")
+        clipboardReader.text = "clipboard selection"
+        accessibilityReader.isWebContent = false
+        let callsBeforeClipboard = clipboardReader.callCount
+
         accessibilityReader.text = nil
         let clipboardResult = try await manager.selectedText()
         try expect(clipboardResult == "clipboard selection", "Clipboard fallback should return copied text")
-        try expect(clipboardReader.callCount == 1, "Clipboard fallback should run exactly once")
+        try expect(clipboardReader.callCount == callsBeforeClipboard + 1, "Clipboard fallback should run exactly once")
+        try expect(recentClipboard.ignoreDepth == 0, "Clipboard monitoring should resume after copying")
+
+        clipboardReader.text = nil
+        let recentResult = try await manager.selectedText()
+        try expect(recentResult == "recent copy", "A recent copy-on-select write should be the last fallback")
+
+        let ghostty = SourceApplicationSnapshot(processIdentifier: 43, bundleIdentifier: "com.mitchellh.ghostty")
+        sourceProvider.application = ghostty
+        clipboardReader.text = "should not be used"
+        let callsBeforeGhostty = clipboardReader.callCount
+        let ghosttyResult = try await manager.selectedText()
+        try expect(ghosttyResult == "recent copy", "Ghostty TUI selections should use the recent clipboard write")
+        try expect(clipboardReader.callCount == callsBeforeGhostty, "Ghostty must not receive a synthetic copy shortcut")
+
+        recentClipboard.text = nil
+        do {
+            _ = try await manager.selectedText()
+            throw TestFailure.assertion("Ghostty without a selection should report no selection")
+        } catch let error as TranslationError {
+            try expect(error == .noSelection, "Expected noSelection for Ghostty without a selection")
+        }
+        sourceProvider.application = source
+
+        let monitorPasteboard = NSPasteboard(name: .init("RecentClipboardTests-\(UUID().uuidString)"))
+        var clock = Date(timeIntervalSince1970: 1_000)
+        let monitor = PasteboardChangeMonitor(
+            pasteboard: monitorPasteboard,
+            sourceApplications: sourceProvider,
+            now: { clock }
+        )
+        try expect(monitor.recentText(copiedFrom: source, within: 15) == nil, "Existing clipboard contents are not a recent copy")
+        monitorPasteboard.clearContents()
+        monitorPasteboard.writeObjects(["opencode selection" as NSString])
+        monitor.poll()
+        clock += 5
+        try expect(monitor.recentText(copiedFrom: source, within: 15) == "opencode selection", "A fresh copy from the source app should be used")
+        try expect(monitor.recentText(copiedFrom: source, within: 0) == nil, "A zero window disables recent copies")
+        try expect(monitor.recentText(copiedFrom: source, within: 3) == nil, "Copies older than the window must be ignored")
+        let otherApp = SourceApplicationSnapshot(processIdentifier: 99, bundleIdentifier: "com.example.other")
+        try expect(monitor.recentText(copiedFrom: otherApp, within: 15) == nil, "A copy made in another app must be ignored")
+        clock += 20
+        try expect(monitor.recentText(copiedFrom: source, within: 15) == nil, "An old copy must be ignored")
+
+        monitor.beginIgnoringChanges()
+        monitorPasteboard.clearContents()
+        monitorPasteboard.writeObjects(["own write" as NSString])
+        monitor.endIgnoringChanges()
+        try expect(monitor.recentText(copiedFrom: source, within: 15) == nil, "The app's own clipboard writes must be ignored")
+
+        PasteboardChangeMonitor.writeOwnText("copied translation", to: monitorPasteboard)
+        try expect(monitor.recentText(copiedFrom: source, within: 15) == nil, "Copied translations must not count as source copies")
+        try expect(monitorPasteboard.string(forType: .string) == "copied translation", "Copied translation text should remain readable")
+
+        var settings = SelectionSettings(recentClipboardWindow: 30, cleansTerminalText: true)
+        let terminal = SourceApplicationSnapshot(processIdentifier: 44, bundleIdentifier: "com.mitchellh.ghostty")
+        sourceProvider.application = terminal
+        accessibilityReader.text = "  ┃ first line\n  ┃ second line   "
+        let settingsManager = TextSelectionManager(
+            sourceApplications: sourceProvider,
+            accessibilityReader: accessibilityReader,
+            clipboardReader: clipboardReader,
+            recentClipboard: recentClipboard,
+            settings: { settings },
+            isAccessibilityTrusted: { true }
+        )
+        let cleanedSelection = try await settingsManager.selectedText()
+        try expect(cleanedSelection == "first line\nsecond line", "Terminal text should be cleaned")
+        settings.cleansTerminalText = false
+        let rawSelection = try await settingsManager.selectedText()
+        try expect(rawSelection == "  ┃ first line\n  ┃ second line   ", "Terminal cleanup should respect the setting")
+        accessibilityReader.text = nil
+        recentClipboard.text = "recent"
+        _ = try? await settingsManager.selectedText()
+        try expect(recentClipboard.lastWindow == 30, "The configured recent clipboard window should be used")
+        sourceProvider.application = source
 
         let pasteboard = NSPasteboard(name: .init("SelectionDelayTests-\(UUID().uuidString)"))
         let customType = NSPasteboard.PasteboardType("com.zwalking.tests.custom")
@@ -270,6 +412,215 @@ private struct CoreTestRunner {
             "A later user clipboard change must not be overwritten"
         )
         try expect(pasteboard.string(forType: .string) == "user change", "The user's clipboard change should remain")
+    }
+
+    private static func streamingTests() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [URLProtocolStub.self]
+        let service = TranslationService(session: URLSession(configuration: configuration))
+        let config = TranslationConfiguration(
+            baseURL: "https://api.example.com/v1/chat/completions",
+            apiKey: "secret",
+            modelName: "test-model",
+            apiType: .cloud,
+            providerID: "test"
+        )
+        URLProtocolStub.handler = { request in
+            let body = try JSONSerialization.jsonObject(with: request.bodyData) as? [String: Any]
+            try expect(body?["stream"] as? Bool == true, "Requests should ask for streaming")
+            try expect(body?["thinking"] == nil, "Non-DeepSeek servers must not receive the thinking field")
+            let messages = body?["messages"] as? [[String: Any]]
+            let system = messages?.first?["content"] as? String ?? ""
+            try expect(system.contains("file paths"), "The prompt should protect paths and code")
+            try expect(system.contains("Never answer"), "The prompt should not answer embedded questions")
+            let stream = """
+            data: {"choices":[{"delta":{"role":"assistant"}}]}
+
+            data: {"choices":[{"delta":{"content":"你"}}]}
+
+            data: {"choices":[{"delta":{"content":"好"}}]}
+
+            data: [DONE]
+
+            """
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream; charset=utf-8"]
+            )!
+            return (response, Data(stream.utf8))
+        }
+        let partials = PartialRecorder()
+        let result = try await service.translate(
+            .init(text: "hello", targetLanguage: .defaultLanguage, configuration: config)
+        ) { progress in partials.values.append(progress) }
+        try expect(result == "你好", "Streamed deltas should be joined")
+        let recorded = await MainActor.run { partials.values }
+        try expect(recorded == [.text("你"), .text("你好")], "Partial results should accumulate, got \(recorded)")
+
+        try expect(
+            TranslationService.supportsThinkingControl(for: URL(string: "https://api.deepseek.com/v1/chat/completions")!),
+            "DeepSeek requests should control thinking"
+        )
+        try expect(
+            !TranslationService.supportsThinkingControl(for: URL(string: "https://api.notdeepseek.com/v1/chat/completions")!),
+            "Lookalike hosts must not receive DeepSeek-only fields"
+        )
+        URLProtocolStub.handler = { request in
+            let body = try JSONSerialization.jsonObject(with: request.bodyData) as? [String: Any]
+            let thinking = body?["thinking"] as? [String: String]
+            try expect(thinking == ["type": "disabled"], "DeepSeek requests should send thinking disabled")
+            let data = #"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#.data(using: .utf8)!
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
+        }
+        var deepSeek = config
+        deepSeek.baseURL = "https://api.deepseek.com/v1/chat/completions"
+        _ = try await service.translate(.init(text: "hello", targetLanguage: .defaultLanguage, configuration: deepSeek))
+
+        URLProtocolStub.handler = { request in
+            let body = try JSONSerialization.jsonObject(with: request.bodyData) as? [String: Any]
+            let thinking = body?["thinking"] as? [String: String]
+            try expect(thinking == ["type": "enabled"], "Thinking mode should be sent when enabled")
+            try expect(body?["max_tokens"] as? Int == 16_384, "Thinking mode needs room for reasoning tokens")
+            let stream = """
+            data: {"choices":[{"delta":{"reasoning_content":"Let me think"}}]}
+
+            data: {"choices":[{"delta":{"reasoning_content":" more"}}]}
+
+            data: {"choices":[{"delta":{"content":"好"}}]}
+
+            data: [DONE]
+
+            """
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data(stream.utf8))
+        }
+        deepSeek.enablesThinking = true
+        let thinkingPartials = PartialRecorder()
+        let thoughtResult = try await service.translate(
+            .init(text: "hello", targetLanguage: .defaultLanguage, configuration: deepSeek)
+        ) { progress in thinkingPartials.values.append(progress) }
+        try expect(thoughtResult == "好", "Reasoning must not leak into the translation")
+        let thinkingRecorded = await MainActor.run { thinkingPartials.values }
+        try expect(thinkingRecorded == [.thinking, .text("好")], "Thinking should be reported once, got \(thinkingRecorded)")
+        try expect(
+            TranslationCacheKey(text: "a", language: .defaultLanguage, configuration: deepSeek)
+                != TranslationCacheKey(text: "a", language: .defaultLanguage, configuration: config),
+            "Thinking and non-thinking results must not share cache entries"
+        )
+
+        URLProtocolStub.handler = { request in
+            let stream = "data: {\"error\":{\"message\":\"rate limited\"}}\n\n"
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data(stream.utf8))
+        }
+        do {
+            _ = try await service.translate(.init(text: "hello", targetLanguage: .defaultLanguage, configuration: config))
+            throw TestFailure.assertion("Expected a streamed API error")
+        } catch let error as TranslationError {
+            try expect(error == .apiError("rate limited"), "Streamed API errors should be surfaced")
+        }
+    }
+
+    private static func textProcessingTests() throws {
+        let wrapped = """
+          This is a long English paragraph that the terminal wrapped at its
+          width, so the copied text contains hard line breaks in the middle.
+          - list item stays separate
+
+          第二段是中文内容，终端会在固定宽度处把这一段很长的中文硬生生地折
+          成两行，复制出来就断开了。
+        """
+        let cleaned = SelectionTextNormalizer.normalizedTerminalText(wrapped)
+        try expect(
+            cleaned == """
+            This is a long English paragraph that the terminal wrapped at its width, so the copied text contains hard line breaks in the middle.
+            - list item stays separate
+
+            第二段是中文内容，终端会在固定宽度处把这一段很长的中文硬生生地折成两行，复制出来就断开了。
+            """,
+            "Wrapped terminal text should be joined, got:\n\(cleaned)"
+        )
+        let shortLines = "ls -la\ncd src\ngit status"
+        try expect(SelectionTextNormalizer.normalizedTerminalText(shortLines) == shortLines, "Short command lines must stay separate")
+        try expect(
+            SelectionTextNormalizer.normalizedTerminalText("│ boxed\n│ text") == "boxed\ntext",
+            "Shared TUI borders should be removed"
+        )
+
+        let chinese = TargetLanguage.languages.first { $0.id == "zh-CN" }!
+        let english = TargetLanguage.languages.first { $0.id == "en" }!
+        let japanese = TargetLanguage.languages.first { $0.id == "ja" }!
+        let chineseText = "竖版油画已经生成完成，构图接近四比五，原图尺寸与预期不同。"
+        let englishText = "The quick brown fox jumps over the lazy dog near the river bank."
+        try expect(TargetLanguageRouter.detectedLanguageID(of: chineseText) == "zh-CN", "Chinese should be detected")
+        try expect(TargetLanguageRouter.effectiveLanguage(for: chineseText, preferred: chinese) == english, "Chinese→Chinese should switch to English")
+        try expect(TargetLanguageRouter.effectiveLanguage(for: englishText, preferred: english) == chinese, "English→English should switch to Chinese")
+        try expect(TargetLanguageRouter.effectiveLanguage(for: englishText, preferred: chinese) == chinese, "Different languages keep the preference")
+        try expect(TargetLanguageRouter.effectiveLanguage(for: chineseText, preferred: japanese) == japanese, "Other targets keep the preference")
+    }
+
+    @MainActor
+    private static func cacheTests() throws {
+        let config = TranslationConfiguration(
+            baseURL: "https://api.example.com/v1/chat/completions",
+            apiKey: "secret",
+            modelName: "model-a",
+            apiType: .cloud,
+            providerID: "test"
+        )
+        let cache = TranslationCache(capacity: 2)
+        let first = TranslationCacheKey(text: "one", language: .defaultLanguage, configuration: config)!
+        let second = TranslationCacheKey(text: "two", language: .defaultLanguage, configuration: config)!
+        let third = TranslationCacheKey(text: "three", language: .defaultLanguage, configuration: config)!
+        cache.insert("一", for: first)
+        cache.insert("二", for: second)
+        _ = cache.value(for: first)
+        cache.insert("三", for: third)
+        try expect(cache.value(for: first) == "一", "Recently used entries should stay cached")
+        try expect(cache.value(for: second) == nil, "The least recently used entry should be evicted")
+        var otherModel = config
+        otherModel.modelName = "model-b"
+        try expect(
+            TranslationCacheKey(text: "one", language: .defaultLanguage, configuration: otherModel) != first,
+            "Different models must not share cache entries"
+        )
+        var unnamedModel = config
+        unnamedModel.modelName = " "
+        try expect(
+            TranslationCacheKey(text: "one", language: .defaultLanguage, configuration: unnamedModel) == nil,
+            "Auto-selected local models should not be cached"
+        )
+    }
+
+    @MainActor
+    private static func preferencesTests() throws {
+        let suite = "PreferencesTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults)
+        try expect(preferences.selectionSettings == .default, "Preferences should start with defaults")
+        try expect(preferences.autoSwitchLanguage, "Automatic language switching should default on")
+        preferences.recentClipboardWindow = 30
+        preferences.cleansTerminalText = false
+        preferences.autoSwitchLanguage = false
+        let reloaded = AppPreferences(defaults: defaults)
+        try expect(reloaded.recentClipboardWindow == 30, "The clipboard window should persist")
+        try expect(!reloaded.cleansTerminalText, "Terminal cleanup should persist")
+        try expect(!reloaded.autoSwitchLanguage, "Automatic switching should persist")
+        defaults.set(7.0, forKey: AppPreferences.recentClipboardWindowKey)
+        try expect(AppPreferences(defaults: defaults).recentClipboardWindow == 15, "Unsupported windows fall back to default")
     }
 
     @MainActor

@@ -307,7 +307,7 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
         modelLabel.stringValue = model.modelName.isEmpty ? L10n.appName : model.modelName
         originalTextView.string = model.originalText
         languagePopup.removeAllItems()
-        languagePopup.addItems(withTitles: TargetLanguage.languages.map(\.displayName))
+        languagePopup.addItems(withTitles: TargetLanguage.languages.map(\.nativeName))
         languagePopup.selectItem(at: TargetLanguage.languages.firstIndex(of: model.selectedLanguage) ?? 0)
         pinButton.image = NSImage(systemSymbolName: model.isPinned ? "pin.fill" : "pin", accessibilityDescription: nil)
         pinButton.toolTip = model.isPinned ? L10n.unpin : L10n.pin
@@ -320,13 +320,13 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
         case .idle:
             statusLabel.stringValue = ""
             resultTextView.string = ""
-        case .loading:
+        case .loading, .thinking:
             statusStack.isHidden = false
             progressIndicator.isHidden = false
             progressIndicator.startAnimation(nil)
-            statusLabel.stringValue = L10n.translating
+            statusLabel.stringValue = model.state == .thinking ? L10n.thinking : L10n.translating
             resultTextView.string = ""
-        case .result(let text):
+        case .streaming(let text), .result(let text):
             statusLabel.stringValue = ""
             resultTextView.string = text
         case .error(let message):
@@ -447,9 +447,6 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
         modelLabel.lineBreakMode = .byTruncatingTail
         modelLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        languagePopup.target = self
-        languagePopup.action = #selector(languageChanged)
-        languagePopup.controlSize = .small
         pinButton.image = NSImage(systemSymbolName: "pin", accessibilityDescription: L10n.pin)
         pinButton.bezelStyle = .accessoryBarAction
         pinButton.isBordered = false
@@ -463,7 +460,7 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let stack = NSStackView(views: [icon, modelLabel, spacer, languagePopup, pinButton, closeButton])
+        let stack = NSStackView(views: [icon, modelLabel, spacer, pinButton, closeButton])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
@@ -533,6 +530,12 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
         let label = NSTextField(labelWithString: L10n.result)
         label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         label.textColor = .secondaryLabelColor
+        languagePopup.target = self
+        languagePopup.action = #selector(languageChanged)
+        languagePopup.controlSize = .small
+        languagePopup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        languagePopup.isBordered = false
+        languagePopup.toolTip = L10n.text("Target Language")
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         copyButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: L10n.copy)
@@ -541,7 +544,7 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
         copyButton.toolTip = L10n.copy
         copyButton.target = self
         copyButton.action = #selector(copyTranslation)
-        let stack = NSStackView(views: [label, spacer, copyButton])
+        let stack = NSStackView(views: [label, languagePopup, spacer, copyButton])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         return stack
@@ -559,8 +562,7 @@ final class TranslationPanelContentController: NSViewController, NSSplitViewDele
 
     @objc private func copyTranslation() {
         guard let text = model?.translatedText, !text.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        PasteboardChangeMonitor.writeOwnText(text)
     }
 
     private static func makeScrollView() -> NSScrollView {

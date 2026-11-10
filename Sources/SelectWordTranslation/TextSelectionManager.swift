@@ -33,20 +33,34 @@ final class WorkspaceSourceApplicationProvider: SourceApplicationProviding {
     }
 }
 
+struct AccessibilitySelection: Equatable, Sendable {
+    let text: String
+    /// Web content (browsers, Electron) joins block elements without line breaks in its AX text,
+    /// so a real copy is preferred there to keep paragraphs.
+    var isWebContent = false
+}
+
 struct AccessibilitySelectionResolver<Element> {
     let selectedText: (Element) -> String?
     let selectedRangeText: (Element) -> String?
     let selectedMarkerText: (Element) -> String?
     let parent: (Element) -> Element?
+    var isWebArea: (Element) -> Bool = { _ in false }
     var maximumDepth = 8
 
-    func resolve(startingAt element: Element) -> String? {
+    func resolve(startingAt element: Element) -> AccessibilitySelection? {
         var current: Element? = element
         for _ in 0..<maximumDepth {
             guard let candidate = current else { break }
-            if let text = nonempty(selectedText(candidate)) { return text }
-            if let text = nonempty(selectedRangeText(candidate)) { return text }
-            if let text = nonempty(selectedMarkerText(candidate)) { return text }
+            if let text = nonempty(selectedText(candidate)) {
+                return AccessibilitySelection(text: text, isWebContent: isWebArea(candidate))
+            }
+            if let text = nonempty(selectedRangeText(candidate)) {
+                return AccessibilitySelection(text: text, isWebContent: isWebArea(candidate))
+            }
+            if let text = nonempty(selectedMarkerText(candidate)) {
+                return AccessibilitySelection(text: text, isWebContent: true)
+            }
             current = parent(candidate)
         }
         return nil
@@ -60,12 +74,12 @@ struct AccessibilitySelectionResolver<Element> {
 
 @MainActor
 protocol AccessibilitySelectionReading: AnyObject {
-    func selectedText(for application: SourceApplicationSnapshot) -> String?
+    func selectedText(for application: SourceApplicationSnapshot) -> AccessibilitySelection?
 }
 
 @MainActor
 final class SystemAccessibilitySelectionReader: AccessibilitySelectionReading {
-    func selectedText(for application: SourceApplicationSnapshot) -> String? {
+    func selectedText(for application: SourceApplicationSnapshot) -> AccessibilitySelection? {
         let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
         let focusedElement = Self.elementAttribute(applicationElement, kAXFocusedUIElementAttribute)
             ?? focusedSystemElement(for: application.processIdentifier)
@@ -75,7 +89,8 @@ final class SystemAccessibilitySelectionReader: AccessibilitySelectionReading {
             selectedText: Self.directSelectedText,
             selectedRangeText: Self.selectedRangeText,
             selectedMarkerText: Self.selectedMarkerText,
-            parent: { Self.elementAttribute($0, kAXParentAttribute) }
+            parent: { Self.elementAttribute($0, kAXParentAttribute) },
+            isWebArea: { Self.attribute($0, kAXRoleAttribute) as? String == "AXWebArea" }
         )
         return resolver.resolve(startingAt: focusedElement)
     }
@@ -264,22 +279,138 @@ final class ClipboardSelectionReader: ClipboardSelectionReading {
     }
 }
 
+struct SelectionSettings: Equatable, Sendable {
+    /// How long a clipboard write from the source app counts as a fresh copy. Zero disables it.
+    var recentClipboardWindow: TimeInterval
+    var cleansTerminalText: Bool
+
+    static let `default` = SelectionSettings(recentClipboardWindow: 15, cleansTerminalText: true)
+}
+
+@MainActor
+protocol RecentClipboardProviding: AnyObject {
+    func recentText(copiedFrom application: SourceApplicationSnapshot, within window: TimeInterval) -> String?
+    func beginIgnoringChanges()
+    func endIgnoringChanges()
+}
+
+/// Tracks clipboard writes so text copied in the source app shortly before the shortcut
+/// (for example with Ctrl+C inside a terminal TUI) can be used when no native selection exists.
+@MainActor
+final class PasteboardChangeMonitor: RecentClipboardProviding {
+    /// Marks clipboard contents written by this app so they are never treated as a source-app copy.
+    static let ownContentType = NSPasteboard.PasteboardType("com.zwalking.SelectWordTranslation.own")
+
+    private struct Change {
+        let changeCount: Int
+        let date: Date
+        let processIdentifier: pid_t?
+    }
+
+    private let pasteboard: NSPasteboard
+    private let sourceApplications: SourceApplicationProviding
+    private let now: () -> Date
+    private var observedChangeCount: Int
+    private var latestChange: Change?
+    private var ignoreDepth = 0
+    private var timer: Timer?
+
+    init(
+        pasteboard: NSPasteboard = .general,
+        sourceApplications: SourceApplicationProviding,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.pasteboard = pasteboard
+        self.sourceApplications = sourceApplications
+        self.now = now
+        observedChangeCount = pasteboard.changeCount
+    }
+
+    func start(interval: TimeInterval = 0.25) {
+        guard timer == nil else { return }
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.poll() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    func poll() {
+        let changeCount = pasteboard.changeCount
+        guard changeCount != observedChangeCount else { return }
+        observedChangeCount = changeCount
+        guard ignoreDepth == 0, !(pasteboard.types ?? []).contains(Self.ownContentType) else {
+            latestChange = nil
+            return
+        }
+        latestChange = Change(
+            changeCount: changeCount,
+            date: now(),
+            processIdentifier: sourceApplications.frontmostApplication()?.processIdentifier
+        )
+    }
+
+    func recentText(copiedFrom application: SourceApplicationSnapshot, within window: TimeInterval) -> String? {
+        poll()
+        guard window > 0,
+              let change = latestChange,
+              change.changeCount == pasteboard.changeCount,
+              change.processIdentifier == application.processIdentifier,
+              now().timeIntervalSince(change.date) <= window else { return nil }
+        return PasteboardSelectionParser.text(from: pasteboard, sourceBundleIdentifier: application.bundleIdentifier)
+    }
+
+    func beginIgnoringChanges() {
+        poll()
+        ignoreDepth += 1
+    }
+
+    func endIgnoringChanges() {
+        poll()
+        ignoreDepth = max(0, ignoreDepth - 1)
+    }
+
+    static func writeOwnText(_ text: String, to pasteboard: NSPasteboard = .general) {
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        item.setData(Data(), forType: ownContentType)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([item])
+    }
+}
+
 @MainActor
 final class TextSelectionManager: TextSelectionProviding {
+    /// Apps whose Accessibility selection is authoritative. Synthesizing ⌘C there adds nothing
+    /// and can be harmful: Ghostty only copies its own selection (already exposed through AX),
+    /// and users may remap ⌘C to send input to the running terminal program.
+    static let accessibilityOnlyBundleIdentifiers: Set<String> = ["com.mitchellh.ghostty"]
+
     private let logger = Logger(subsystem: "com.zwalking.SelectWordTranslation", category: "TextSelection")
     private let sourceApplications: SourceApplicationProviding
     private let accessibilityReader: AccessibilitySelectionReading
     private let clipboardReader: ClipboardSelectionReading
+    private let recentClipboard: RecentClipboardProviding
+    private let settings: () -> SelectionSettings
     private let isAccessibilityTrusted: () -> Bool
 
-    convenience init() {
+    convenience init(settings: @escaping () -> SelectionSettings = { .default }) {
         let sourceApplications = WorkspaceSourceApplicationProvider()
+        let monitor = PasteboardChangeMonitor(sourceApplications: sourceApplications)
+        monitor.start()
         self.init(
             sourceApplications: sourceApplications,
             accessibilityReader: SystemAccessibilitySelectionReader(),
             clipboardReader: ClipboardSelectionReader(
                 copyCommandSender: SystemSelectionCopyCommandSender(sourceApplications: sourceApplications)
             ),
+            recentClipboard: monitor,
+            settings: settings,
             isAccessibilityTrusted: AXIsProcessTrusted
         )
     }
@@ -288,11 +419,15 @@ final class TextSelectionManager: TextSelectionProviding {
         sourceApplications: SourceApplicationProviding,
         accessibilityReader: AccessibilitySelectionReading,
         clipboardReader: ClipboardSelectionReading,
+        recentClipboard: RecentClipboardProviding,
+        settings: @escaping () -> SelectionSettings = { .default },
         isAccessibilityTrusted: @escaping () -> Bool
     ) {
         self.sourceApplications = sourceApplications
         self.accessibilityReader = accessibilityReader
         self.clipboardReader = clipboardReader
+        self.recentClipboard = recentClipboard
+        self.settings = settings
         self.isAccessibilityTrusted = isAccessibilityTrusted
     }
 
@@ -300,16 +435,44 @@ final class TextSelectionManager: TextSelectionProviding {
         guard let sourceApplication = sourceApplications.frontmostApplication() else {
             throw TranslationError.noSelection
         }
+        let settings = settings()
+        let text = try await rawSelectedText(from: sourceApplication, settings: settings)
+        guard settings.cleansTerminalText, TerminalApplications.contains(sourceApplication.bundleIdentifier) else {
+            return text
+        }
+        return SelectionTextNormalizer.normalizedTerminalText(text)
+    }
+
+    private func rawSelectedText(
+        from sourceApplication: SourceApplicationSnapshot,
+        settings: SelectionSettings
+    ) async throws -> String {
         let bundleIdentifier = sourceApplication.bundleIdentifier ?? "unknown"
         let trusted = isAccessibilityTrusted()
 
-        if let text = accessibilityReader.selectedText(for: sourceApplication), !text.isEmpty {
+        let canSendCopy = !Self.accessibilityOnlyBundleIdentifiers.contains(bundleIdentifier)
+        if let selection = accessibilityReader.selectedText(for: sourceApplication), !selection.text.isEmpty {
+            if selection.isWebContent, canSendCopy,
+               let copied = try await copiedSelection(from: sourceApplication),
+               !copied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                logger.debug("Web selection read through clipboard from \(bundleIdentifier, privacy: .public)")
+                return copied
+            }
             logger.debug("Selection read through Accessibility from \(bundleIdentifier, privacy: .public)")
-            return text
+            return selection.text
         }
-        if let text = try await clipboardReader.selectedText(for: sourceApplication), !text.isEmpty {
+        let recentText = recentClipboard.recentText(
+            copiedFrom: sourceApplication,
+            within: settings.recentClipboardWindow
+        )
+        if canSendCopy,
+           let text = try await copiedSelection(from: sourceApplication), !text.isEmpty {
             logger.debug("Selection read through clipboard from \(bundleIdentifier, privacy: .public)")
             return text
+        }
+        if let recentText, !recentText.isEmpty {
+            logger.debug("Selection read from a recent clipboard write by \(bundleIdentifier, privacy: .public)")
+            return recentText
         }
         if !trusted {
             logger.notice("Accessibility permission is unavailable for \(bundleIdentifier, privacy: .public)")
@@ -318,6 +481,12 @@ final class TextSelectionManager: TextSelectionProviding {
         }
         logger.notice("No selection was exposed by \(bundleIdentifier, privacy: .public)")
         throw TranslationError.noSelection
+    }
+
+    private func copiedSelection(from application: SourceApplicationSnapshot) async throws -> String? {
+        recentClipboard.beginIgnoringChanges()
+        defer { recentClipboard.endIgnoringChanges() }
+        return try await clipboardReader.selectedText(for: application)
     }
 
     private func promptForAccessibilityPermission() {

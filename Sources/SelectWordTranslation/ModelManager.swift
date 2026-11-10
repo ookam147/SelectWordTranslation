@@ -24,6 +24,7 @@ final class ModelManager: ObservableObject {
     static let modelNameKey = "modelName"
     static let apiTypeKey = "apiType"
     static let providerIDKey = "providerID"
+    static let enablesThinkingKey = "enablesThinking"
 
     @Published private(set) var configuration: TranslationConfiguration
     @Published private(set) var connectionState: ConnectionState = .notChecked
@@ -53,7 +54,8 @@ final class ModelManager: ObservableObject {
             apiKey: "",
             modelName: defaults.string(forKey: Self.modelNameKey) ?? "",
             apiType: apiType,
-            providerID: providerID
+            providerID: providerID,
+            enablesThinking: defaults.bool(forKey: Self.enablesThinkingKey)
         )
         CredentialMigrator.migrateIfNeeded(defaults: defaults, store: credentials, configuration: initial, presets: presets.allPresets)
         var loaded = initial
@@ -71,6 +73,7 @@ final class ModelManager: ObservableObject {
         defaults.set(newValue.modelName, forKey: Self.modelNameKey)
         defaults.set(newValue.apiType.rawValue, forKey: Self.apiTypeKey)
         defaults.set(newValue.providerID, forKey: Self.providerIDKey)
+        defaults.set(newValue.enablesThinking, forKey: Self.enablesThinkingKey)
         defaults.removeObject(forKey: Self.apiKeyKey)
         configuration = newValue
         connectionState = .notChecked
@@ -82,7 +85,8 @@ final class ModelManager: ObservableObject {
             apiKey: (try? credentials.apiKey(for: preset.id)) ?? "",
             modelName: preset.defaultModel,
             apiType: apiType,
-            providerID: preset.id
+            providerID: preset.id,
+            enablesThinking: configuration.enablesThinking
         )
     }
 

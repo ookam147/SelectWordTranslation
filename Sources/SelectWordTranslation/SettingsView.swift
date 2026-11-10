@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var modelManager: ModelManager
     @ObservedObject private var presetManager: PresetManager
+    @ObservedObject var preferences: AppPreferences
     let hotkeyManager: HotkeyManager
     let translationService: TranslationServicing
 
@@ -13,9 +14,15 @@ struct SettingsView: View {
     @State private var message = ""
     @State private var showAddProvider = false
 
-    init(modelManager: ModelManager, hotkeyManager: HotkeyManager, translationService: TranslationServicing) {
+    init(
+        modelManager: ModelManager,
+        preferences: AppPreferences,
+        hotkeyManager: HotkeyManager,
+        translationService: TranslationServicing
+    ) {
         self.modelManager = modelManager
         presetManager = modelManager.presetManager
+        self.preferences = preferences
         self.hotkeyManager = hotkeyManager
         self.translationService = translationService
         _draft = State(initialValue: modelManager.configuration)
@@ -30,7 +37,7 @@ struct SettingsView: View {
                 .tabItem { Label("Translation Service", systemImage: "network") }
         }
         .padding(20)
-        .frame(width: 560, height: 420)
+        .frame(width: 560, height: 500)
         .sheet(isPresented: $showAddProvider) {
             AddProviderView { name, url, model in
                 let preset = presetManager.addPreset(name: name, baseURL: url, defaultModel: model)
@@ -46,8 +53,18 @@ struct SettingsView: View {
                     get: { modelManager.targetLanguage },
                     set: { modelManager.setTargetLanguage($0) }
                 )) {
-                    ForEach(TargetLanguage.languages) { Text($0.displayName).tag($0) }
+                    ForEach(TargetLanguage.languages) { Text($0.nativeName).tag($0) }
                 }
+                Toggle("Switch language when text is already in the target language", isOn: $preferences.autoSwitchLanguage)
+            }
+
+            Section("Text Selection") {
+                Picker("Use recently copied text", selection: $preferences.recentClipboardWindow) {
+                    ForEach(AppPreferences.recentClipboardWindowOptions, id: \.self) { seconds in
+                        Text(seconds == 0 ? L10n.text("Off") : L10n.seconds(Int(seconds))).tag(seconds)
+                    }
+                }
+                Toggle("Clean up line breaks in terminal text", isOn: $preferences.cleansTerminalText)
             }
 
             Section("Global Shortcut") {
@@ -105,6 +122,14 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Thinking mode", isOn: $draft.enablesThinking)
+            } footer: {
+                Text("Slower but more accurate. Currently applies to DeepSeek.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 HStack {
                     Button("Test Connection") {
                         Task { await modelManager.testConnection(using: translationService, draft: draft) }
@@ -126,6 +151,8 @@ struct SettingsView: View {
     }
 
     private func switchMode(to type: APIType) {
+        let enablesThinking = draft.enablesThinking
+        defer { draft.enablesThinking = enablesThinking }
         if type == .local {
             draft = .defaultLocal
         } else if let preset = presetManager.allPresets.first {
@@ -135,7 +162,9 @@ struct SettingsView: View {
 
     private func selectProvider(id: String) {
         guard let preset = presetManager.preset(id: id) else { return }
+        let enablesThinking = draft.enablesThinking
         draft = modelManager.configuration(for: preset)
+        draft.enablesThinking = enablesThinking
     }
 
     private func saveConfiguration() {

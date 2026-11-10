@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 final class AppCoordinator: NSObject, HotkeyManagerDelegate {
     private let logger = Logger(subsystem: "com.zwalking.SelectWordTranslation", category: "Application")
     private let modelManager: ModelManager
+    private let preferences: AppPreferences
     private let hotkeyManager: HotkeyManager
     private let selectionProvider: TextSelectionProviding
     private let translationService: TranslationServicing
@@ -39,6 +40,8 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
     private let menuBarManager: MenuBarManager
     private var translationTask: Task<Void, Never>?
     private let requestTracker = RequestTracker()
+    private let translationCache = TranslationCache()
+    private var lastPartialRefresh = Date.distantPast
     private var currentText = ""
     private var currentPosition = NSPoint.zero
 
@@ -46,11 +49,15 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
         let credentials = KeychainCredentialStore()
         let presets = PresetManager()
         let modelManager = ModelManager(credentials: credentials, presetManager: presets)
+        let preferences = AppPreferences()
         let hotkeyManager = HotkeyManager()
         let service = TranslationService()
         self.modelManager = modelManager
+        self.preferences = preferences
         self.hotkeyManager = hotkeyManager
-        selectionProvider = TextSelectionManager()
+        selectionProvider = TextSelectionManager { [weak preferences] in
+            preferences?.selectionSettings ?? .default
+        }
         translationService = service
         popupManager = PopupWindowManager()
         popupViewModel = TranslationPopupViewModel(
@@ -59,7 +66,12 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
             modelName: "",
             selectedLanguage: modelManager.targetLanguage
         )
-        menuBarManager = MenuBarManager(modelManager: modelManager, hotkeyManager: hotkeyManager, translationService: service)
+        menuBarManager = MenuBarManager(
+            modelManager: modelManager,
+            preferences: preferences,
+            hotkeyManager: hotkeyManager,
+            translationService: service
+        )
         super.init()
     }
 
@@ -100,7 +112,19 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
             error.pointee = L10n.noSelection as NSString
             return
         }
-        startTranslation(text: text, language: modelManager.targetLanguage, at: NSEvent.mouseLocation, preservePosition: false)
+        startTranslation(
+            text: text,
+            language: automaticLanguage(for: text),
+            at: NSEvent.mouseLocation,
+            preservePosition: false,
+            persistLanguage: false
+        )
+    }
+
+    private func automaticLanguage(for text: String) -> TargetLanguage {
+        let preferred = modelManager.targetLanguage
+        guard preferences.autoSwitchLanguage else { return preferred }
+        return TargetLanguageRouter.effectiveLanguage(for: text, preferred: preferred)
     }
 
     private func startSelectionTranslation(at position: NSPoint) {
@@ -116,9 +140,10 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
                 try await performTranslation(
                     requestID: requestID,
                     text: text,
-                    language: modelManager.targetLanguage,
+                    language: automaticLanguage(for: text),
                     position: position,
-                    preservePosition: false
+                    preservePosition: false,
+                    persistLanguage: false
                 )
             } catch is CancellationError {
                 return
@@ -142,7 +167,13 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
         }
     }
 
-    private func startTranslation(text: String, language: TargetLanguage, at position: NSPoint, preservePosition: Bool) {
+    private func startTranslation(
+        text: String,
+        language: TargetLanguage,
+        at position: NSPoint,
+        preservePosition: Bool,
+        persistLanguage: Bool
+    ) {
         cancelTranslation(hidePopup: false)
         let requestID = requestTracker.begin()
         translationTask = Task { [weak self] in
@@ -153,7 +184,8 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
                     text: text,
                     language: language,
                     position: position,
-                    preservePosition: preservePosition
+                    preservePosition: preservePosition,
+                    persistLanguage: persistLanguage
                 )
             } catch is CancellationError {
                 return
@@ -170,7 +202,8 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
         text: String,
         language: TargetLanguage,
         position: NSPoint,
-        preservePosition: Bool
+        preservePosition: Bool,
+        persistLanguage: Bool
     ) async throws {
         let validatedText = try SelectionValidator.validated(text)
         let configuration = modelManager.configuration
@@ -180,24 +213,57 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
         let request = TranslationRequest(id: requestID, text: validatedText, targetLanguage: language, configuration: configuration)
         currentText = validatedText
         currentPosition = position
-        modelManager.setTargetLanguage(language)
+        if persistLanguage { modelManager.setTargetLanguage(language) }
 
         popupViewModel.originalText = validatedText
-        popupViewModel.state = .loading
         popupViewModel.modelName = configuration.modelName
         popupViewModel.selectedLanguage = language
         popupViewModel.onLanguageChange = { [weak self] newLanguage in
             guard let self else { return }
-            self.startTranslation(text: self.currentText, language: newLanguage, at: self.currentPosition, preservePosition: true)
+            self.startTranslation(
+                text: self.currentText,
+                language: newLanguage,
+                at: self.currentPosition,
+                preservePosition: true,
+                persistLanguage: true
+            )
         }
+
+        let cacheKey = TranslationCacheKey(text: validatedText, language: language, configuration: configuration)
+        if let cacheKey, let cached = translationCache.value(for: cacheKey) {
+            popupViewModel.state = .result(cached)
+            popupManager.show(viewModel: popupViewModel, at: position, preservePosition: preservePosition)
+            finish(requestID: requestID)
+            return
+        }
+
+        popupViewModel.state = .loading
         popupManager.show(viewModel: popupViewModel, at: position, preservePosition: preservePosition)
 
-        let translated = try await translationService.translate(request)
+        lastPartialRefresh = .distantPast
+        let translated = try await translationService.translate(request) { [weak self] progress in
+            self?.showProgress(progress, requestID: requestID)
+        }
         try Task.checkCancellation()
         guard requestTracker.isCurrent(requestID) else { return }
+        if let cacheKey { translationCache.insert(translated, for: cacheKey) }
         popupViewModel.state = .result(translated)
         popupManager.refreshLayout()
         finish(requestID: requestID)
+    }
+
+    private func showProgress(_ progress: TranslationProgress, requestID: UUID) {
+        guard requestTracker.isCurrent(requestID) else { return }
+        guard case .text(let partial) = progress else {
+            popupViewModel.state = .thinking
+            popupManager.refreshLayout()
+            return
+        }
+        let now = Date()
+        guard now.timeIntervalSince(lastPartialRefresh) >= 0.08 else { return }
+        lastPartialRefresh = now
+        popupViewModel.state = .streaming(partial)
+        popupManager.refreshLayout()
     }
 
     private func showError(_ message: String, text: String, language: TargetLanguage, at position: NSPoint, preservePosition: Bool) {
@@ -206,7 +272,13 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
         popupViewModel.modelName = modelManager.configuration.modelName
         popupViewModel.selectedLanguage = language
         popupViewModel.onLanguageChange = { [weak self] newLanguage in
-            self?.startTranslation(text: text, language: newLanguage, at: position, preservePosition: true)
+            self?.startTranslation(
+                text: text,
+                language: newLanguage,
+                at: position,
+                preservePosition: true,
+                persistLanguage: true
+            )
         }
         popupManager.show(viewModel: popupViewModel, at: position, preservePosition: preservePosition)
     }
@@ -226,19 +298,12 @@ final class AppCoordinator: NSObject, HotkeyManagerDelegate {
 
     private func presentError(_ error: Error) {
         logger.error("Operation failed: \(error.localizedDescription, privacy: .public)")
+        // macOS already shows its own Accessibility permission prompt; a second alert would only duplicate it.
+        if (error as? TranslationError) == .accessibilityPermissionRequired { return }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = L10n.error
         alert.informativeText = error.localizedDescription
-        if (error as? TranslationError) == .accessibilityPermissionRequired {
-            alert.addButton(withTitle: L10n.openSettings)
-            alert.addButton(withTitle: L10n.cancel)
-            if alert.runModal() == .alertFirstButtonReturn,
-               let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                NSWorkspace.shared.open(url)
-            }
-        } else {
-            alert.runModal()
-        }
+        alert.runModal()
     }
 }

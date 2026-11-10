@@ -7,6 +7,7 @@ final class MenuBarManager: NSObject, NSWindowDelegate {
     var onTranslateSelection: (() -> Void)?
 
     private let modelManager: ModelManager
+    private let preferences: AppPreferences
     private let hotkeyManager: HotkeyManager
     private let translationService: TranslationServicing
     private var statusItem: NSStatusItem?
@@ -14,8 +15,14 @@ final class MenuBarManager: NSObject, NSWindowDelegate {
     private var settingsWindowController: NSWindowController?
     private var cancellables = Set<AnyCancellable>()
 
-    init(modelManager: ModelManager, hotkeyManager: HotkeyManager, translationService: TranslationServicing) {
+    init(
+        modelManager: ModelManager,
+        preferences: AppPreferences,
+        hotkeyManager: HotkeyManager,
+        translationService: TranslationServicing
+    ) {
         self.modelManager = modelManager
+        self.preferences = preferences
         self.hotkeyManager = hotkeyManager
         self.translationService = translationService
         super.init()
@@ -47,6 +54,7 @@ final class MenuBarManager: NSObject, NSWindowDelegate {
         if settingsWindowController == nil {
             let rootView = SettingsView(
                 modelManager: modelManager,
+                preferences: preferences,
                 hotkeyManager: hotkeyManager,
                 translationService: translationService
             )
@@ -54,7 +62,7 @@ final class MenuBarManager: NSObject, NSWindowDelegate {
             let window = NSWindow(contentViewController: controller)
             window.title = L10n.settings.replacingOccurrences(of: "…", with: "")
             window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 560, height: 420))
+            window.setContentSize(NSSize(width: 560, height: 500))
             window.center()
             window.delegate = self
             settingsWindowController = NSWindowController(window: window)
